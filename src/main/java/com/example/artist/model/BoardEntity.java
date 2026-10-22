@@ -28,11 +28,6 @@ public class BoardEntity {
     private String description;
 
     @ManyToMany(fetch = FetchType.LAZY)
-    @JoinTable(
-            name = "board_images",
-            joinColumns = @JoinColumn(name = "board_id"),
-            inverseJoinColumns = @JoinColumn(name = "image_id")
-    )
     @Builder.Default
     private List<ImageEntity> images = new ArrayList<>();
 

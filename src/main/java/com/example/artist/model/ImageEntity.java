@@ -1,51 +1,38 @@
 package com.example.artist.model;
 
 import jakarta.persistence.*;
-import lombok.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
-/**
- * 图库图片实体。
- */
+@Getter
+@Setter
 @Entity
-@Table(name = "images")
-@Data
-@Builder
+@Table(name = "reference_image")
 @NoArgsConstructor
-@AllArgsConstructor
 public class ImageEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
+    @Column(name = "faiss_id", unique = true)
+    private Long faissId;
+
+    @Column(name = "file_name")
     private String fileName;
 
+    @Column(name = "file_path")
     private String filePath;
 
-    private Long fileSize;
+    @Column(name = "created_at", insertable = false, updatable = false)
+    private OffsetDateTime createdAt;
 
-    private Integer width;
-
-    private Integer height;
-
-    /** 来源类型：LOCAL / UNSPLASH / PEXELS */
-    private String sourceType;
-
-    private String sourceUrl;
-
-    /** CLIP 向量 ID（映射 FAISS 索引） */
-    private Long vectorId;
-
-    // 关联 CLIP/FAISS 索引里的 ID，入库
-    private String faissId;
-
-    // 本次检索相似度，仅返回用，不落库
+    /** CLIP 相关度：非数据库列，仅本次检索响应使用。 */
     @Transient
     private Double score;
 
-    @Builder.Default
-    private LocalDateTime createdAt = LocalDateTime.now();
+    // getter / setter 全部生成（getFaissId 返回 Long，供 toEntities 的 Map key 使用）
 }

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CLIP 本地参考图库检索</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+               background: #f4f6f8; margin: 0; padding: 24px; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { text-align: center; color: #2c3e50; margin: 0 0 6px; }
+        .sub { text-align: center; color: #95a3af; font-size: 13px; margin-bottom: 24px; }
+
+        .tabs { display: flex; gap: 8px; justify-content: center; margin-bottom: 18px; }
+        .tab { padding: 8px 22px; border-radius: 20px; cursor: pointer; background: #fff;
+               border: 1px solid #dfe4e8; font-size: 14px; color: #555; }
+        .tab.active { background: #3498db; color: #fff; border-color: #3498db; }
+
+        .panel { background: #fff; padding: 18px; border-radius: 10px;
+                 box-shadow: 0 2px 8px rgba(0,0,0,.05); margin-bottom: 22px; }
+        .row { display: flex; gap: 10px; align-items: center; }
+        input[type=text] { flex: 1; padding: 12px 14px; font-size: 15px; border: 1px solid #ddd;
+                           border-radius: 6px; outline: none; }
+        input[type=text]:focus { border-color: #3498db; }
+        .opt { width: 90px; padding: 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 6px; }
+        button { padding: 0 22px; height: 42px; font-size: 15px; background: #3498db; color: #fff;
+                 border: none; border-radius: 6px; cursor: pointer; font-weight: 500; white-space: nowrap; }
+        button:hover { background: #2980b9; }
+        button:disabled { background: #bdc3c7; cursor: not-allowed; }
+        .hint { color: #95a3af; font-size: 13px; margin-top: 8px; }
+
+        .drop { border: 2px dashed #cdd6dd; border-radius: 8px; padding: 22px; text-align: center;
+                color: #888; cursor: pointer; transition: .2s; }
+        .drop:hover, .drop.drag { background: #eef6fc; border-color: #3498db; color: #3498db; }
+        .preview { margin-top: 12px; max-height: 180px; display: none; border-radius: 6px; }
+
+        .status { text-align: center; color: #7f8c8d; margin: 18px 0; font-size: 14px; min-height: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; }
+        .card { background: #fff; border-radius: 8px; overflow: hidden;
+                box-shadow: 0 4px 6px rgba(0,0,0,.06); transition: transform .2s; }
+        .card:hover { transform: translateY(-4px); box-shadow: 0 10px 16px rgba(0,0,0,.12); }
+        .card img { width: 100%; height: 230px; object-fit: cover; display: block; background: #eee; }
+        .info { padding: 10px 12px; }
+        .name { font-size: 14px; color: #444; white-space: nowrap; overflow: hidden;
+                text-overflow: ellipsis; margin-bottom: 6px; }
+        .meta { display: flex; justify-content: space-between; font-size: 12px; }
+        .score { color: #27ae60; font-weight: bold; }
+        .fid { color: #aaa; }
+        .topbar { text-align: right; margin-bottom: 12px; }
+        .mini { height: 34px; padding: 0 16px; font-size: 13px; background: #fff; color: #3498db;
+                border: 1px solid #3498db; }
+        .mini:hover { background: #eef6fc; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>CLIP 本地参考图库检索</h1>
+    <div class="sub">文搜图 / 图搜图 · 检索走 Spring Boot，图片流走 Python /api/images/view</div>
+
+    <div class="topbar">
+        <button class="mini" onclick="rebuildIndex()" title="触发 CLIP 索引重建">重建索引</button>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" data-tab="text" onclick="switchTab('text')">文搜图</div>
+        <div class="tab" data-tab="image" onclick="switchTab('image')">图搜图</div>
+    </div>
+
+    <!-- 文搜图 -->
+    <div class="panel" id="panel-text">
+        <div class="row">
+            <input type="text" id="queryInput" placeholder="输入描述，如：雨夜街道、霓虹灯、低角度" value="雨夜街道、霓虹灯">
+            <button id="textBtn" onclick="searchByText()">搜索</button>
+        </div>
+        <div class="hint">
+            topK（返回数）
+            <input class="opt" type="number" id="topK" value="12" min="1" max="100">
+            threshold（相似度阈值）
+            <input class="opt" type="number" id="threshold" value="0.2" min="0" max="1" step="0.05">
+        </div>
+    </div>
+
+    <!-- 图搜图 -->
+    <div class="panel" id="panel-image" style="display:none">
+        <div class="drop" id="drop">点击选择图片，或拖拽图片到此处</div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        <img class="preview" id="preview" alt="preview">
+        <div class="row" style="margin-top:12px">
+            <button id="imageBtn" onclick="searchByImage()">开始图搜图</button>
+            <span class="hint" id="fileNameHint">未选择文件</span>
+        </div>
+    </div>
+
+    <div class="status" id="status">输入关键词或选择图片开始检索</div>
+    <div class="grid" id="resultGrid"></div>
+</div>
+
+<script>
+    // ===== 按实际端口修改 =====
+    const JAVA_BASE   = '';                      // Spring Boot 同源(8080)，留空即用当前域；跨端口时写 http://localhost:8080
+    const PYTHON_BASE = 'http://localhost:8000'; // Python 服务，图片代理 GET /api/images/view
+
+    const statusDiv = document.getElementById('status');
+    const resultGrid = document.getElementById('resultGrid');
+    const drop = document.getElementById('drop');
+    const fileInput = document.getElementById('fileInput');
+    const preview = document.getElementById('preview');
+    const fileNameHint = document.getElementById('fileNameHint');
+    let selectedFile = null;
+
+    // ---- Tab 切换 ----
+    function switchTab(tab) {
+        document.querySelectorAll('.tab').forEach(t =>
+            t.classList.toggle('active', t.dataset.tab === tab));
+        document.getElementById('panel-text').style.display  = tab === 'text'  ? 'block' : 'none';
+        document.getElementById('panel-image').style.display = tab === 'image' ? 'block' : 'none';
+    }
+
+    // ---- 文搜图：GET /api/images/search/text ----
+    async function searchByText() {
+        const query = document.getElementById('queryInput').value.trim();
+        if (!query) return;
+        const topK = document.getElementById('topK').value;
+        const threshold = document.getElementById('threshold').value;
+
+        setLoading(true, '文搜图检索中...');
+        try {
+            const url = `${JAVA_BASE}/api/images/search/text?query=${encodeURIComponent(query)}`
+                      + `&topK=${encodeURIComponent(topK)}&threshold=${encodeURIComponent(threshold)}`;
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            render(await resp.json());
+        } catch (e) {
+            fail('文搜图失败: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // ---- 图搜图：POST /api/images/search/similar (multipart file) ----
+    async function searchByImage() {
+        if (!selectedFile) { statusDiv.textContent = '请先选择一张图片'; return; }
+        setLoading(true, '图搜图检索中...');
+        try {
+            const fd = new FormData();
+            fd.append('file', selectedFile);
+            const resp = await fetch(`${JAVA_BASE}/api/images/search/similar`, {
+                method: 'POST', body: fd
+            });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            render(await resp.json());
+        } catch (e) {
+            fail('图搜图失败: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // ---- 重建索引：POST /api/images/index ----
+    async function rebuildIndex() {
+        if (!confirm('确定要重建 CLIP 索引吗？耗时可能较长。')) return;
+        setLoading(true, '索引重建中...');
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/images/index`, { method: 'POST' });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            statusDiv.textContent = `索引重建完成，indexedCount=${data.indexedCount}`;
+        } catch (e) {
+            fail('索引重建失败: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // ---- 渲染结果卡片 ----
+    function render(list) {
+        resultGrid.innerHTML = '';
+        if (!Array.isArray(list) || list.length === 0) {
+            statusDiv.textContent = '未找到相似图片，试试换个关键词或调低 threshold';
+            return;
+        }
+        statusDiv.textContent = `找到 ${list.length} 张相似图片`;
+        list.forEach(item => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            // 图片走 Python 代理：GET /api/images/view?path=xxx
+            const imgUrl = `${PYTHON_BASE}/api/images/view?path=${encodeURIComponent(item.filePath || '')}`;
+            const score = typeof item.score === 'number' ? (item.score * 100).toFixed(1) + '%' : '-';
+            card.innerHTML =
+                `<img src="${imgUrl}" alt="${item.fileName || ''}" loading="lazy"
+                      onerror="this.style.background='#fde2e2'">
+                 <div class="info">
+                   <div class="name" title="${item.fileName || ''}">${item.fileName || '(无文件名)'}</div>
+                   <div class="meta">
+                     <span class="score">相似度 ${score}</span>
+                     <span class="fid">faissId ${item.faissId ?? '-'}</span>
+                   </div>
+                 </div>`;
+            resultGrid.appendChild(card);
+        });
+    }
+
+    // ---- 文件选择/拖拽 ----
+    drop.addEventListener('click', () => fileInput.click());
+    ['dragover','dragenter'].forEach(ev =>
+        drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+    ['dragleave','drop'].forEach(ev =>
+        drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+    drop.addEventListener('drop', e => { if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]); });
+    fileInput.addEventListener('change', e => { if (e.target.files[0]) pickFile(e.target.files[0]); });
+
+    function pickFile(file) {
+        if (!file.type.startsWith('image/')) { fileNameHint.textContent = '请选择图片文件'; return; }
+        selectedFile = file;
+        fileNameHint.textContent = file.name;
+        preview.src = URL.createObjectURL(file);
+        preview.style.display = 'block';
+    }
+
+    // ---- 通用 ----
+    function setLoading(on, msg) {
+        document.getElementById('textBtn').disabled = on;
+        document.getElementById('imageBtn').disabled = on;
+        if (on && msg) statusDiv.textContent = msg;
+    }
+    function fail(msg) { statusDiv.textContent = msg; resultGrid.innerHTML = ''; }
+
+    // 回车触发文搜图
+    document.getElementById('queryInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') searchByText();
+    });
+</script>
+</body>
+</html>

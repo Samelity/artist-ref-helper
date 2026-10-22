@@ -5,12 +5,31 @@ spring:
   application:
     name: artist-ref-helper
   datasource:
-    url: jdbc:h2:file:./data/artist-db;AUTO_SERVER=TRUE
-    driver-class-name: org.h2.Driver
+    # TIMESTAMPTZ 列建议保留 stringtype=unspecified
+    url: jdbc:postgresql://localhost:5432/postgres?stringtype=unspecified
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    # HikariCP 连接池（Spring Boot 默认池，显式配置便于生产调优）
+    hikari:
+      pool-name: ArtistRefHikariPool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-timeout: 30000
+  # ---------- JPA / Hibernate ----------
   jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
+      # 首次建表可用 update；表结构稳定后建议改 validate，避免实体误改线上 schema
       ddl-auto: update
     show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
   servlet:
     multipart:
       max-file-size: 20MB
@@ -23,16 +42,10 @@ clip:
     connect-timeout-ms: 3000
     read-timeout-ms: 30000
 
-# 向量存储
-vector:
-  faiss:
-    indexPath: ./data/faiss-image-index
-    dimension: 512
-
 # 本地图库
 image:
   search:
-    top-k: 8
+    top-k: 20
     threshold: 0.2
 
 logging:

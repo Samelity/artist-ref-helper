@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from pathlib import Path
 from PIL import Image
+from logger import logger
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -33,7 +34,7 @@ def encode_dir(model, preprocess, image_dir: str, device: str = "cpu"):
     """
     image_paths = list_images(image_dir)
     if not image_paths:
-        print(f"{image_dir} 下没有找到图片")
+        logger.info(f"{image_dir} 下没有找到图片")
         return np.zeros((0, 0), dtype=np.float32), []
 
     embeddings = []
@@ -45,11 +46,11 @@ def encode_dir(model, preprocess, image_dir: str, device: str = "cpu"):
             embeddings.append(vec)
             valid_paths.append(str(path))
         except Exception as e:
-            print(f"Skip {path}: {e}")
+            logger.exception(f"Skip {path}: {e}")
 
     if not embeddings:
         return np.zeros((0, 0), dtype=np.float32), []
 
     vectors = np.vstack(embeddings)  # (N, D)
-    print(f"Encoded {len(valid_paths)} images, dim={vectors.shape[1]}")
+    logger.info(f"Encoded {len(valid_paths)} images, dim={vectors.shape[1]}")
     return vectors, valid_paths

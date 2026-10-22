@@ -14,6 +14,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from clip_embedding import encode_dir
+from logger import logger
 
 # ---------- 配置 ----------
 MODEL_NAME = "ViT-B-32"
@@ -24,7 +25,7 @@ IDS_PATH = "index/image_ids.json"
 
 # ---------- 加载资源（进程内只加载一次）----------
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Loading model on {device} ...")
+logger.info(f"Loading model on {device} ...")
 
 model, preprocess, _ = open_clip.create_model_and_transforms(
     MODEL_NAME, pretrained=PRETRAINED, device=device
@@ -36,7 +37,8 @@ index = faiss.read_index(INDEX_PATH)
 with open(IDS_PATH, "r", encoding="utf-8") as f:
     id_map = json.load(f)
 
-print(f"Index loaded: {index.ntotal} vectors, dimension={index.d}")
+logger.info(f"Index loaded: {index.ntotal} vectors, dimension={index.d}")
+logger.info("Image Service started successfully")
 
 # ---------- FastAPI ----------
 app = FastAPI(title="Reference Image Search")
@@ -99,7 +101,7 @@ def search_by_text(req: TextSearchRequest):
     t0 = time.time()
     vec = _encode_text(req.query)
     resp = _search(vec, req.topK, req.threshold)
-    print(f"[text] query={req.query!r} topK={req.topK} "
+    logger.info(f"[text] query={req.query!r} topK={req.topK} "
           f"results={len(resp.items)} elapsed={time.time() - t0:.3f}s")
     return resp
 
@@ -112,7 +114,7 @@ def search_by_image(file: UploadFile = File(...),
     img = Image.open(file.file)
     vec = _encode_image(img)
     resp = _search(vec, topK, threshold)
-    print(f"[image] file={file.filename!r} topK={topK} "
+    logger.info(f"[image] file={file.filename!r} topK={topK} "
           f"results={len(resp.items)} elapsed={time.time() - t0:.3f}s")
     return resp
 

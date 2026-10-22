@@ -1,0 +1,40 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: artist-ref-helper
+  datasource:
+    url: jdbc:h2:file:./data/artist-db;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+# CLIP Python 微服务
+clip:
+  service:
+    base-url: http://localhost:8000
+    connect-timeout-ms: 3000
+    read-timeout-ms: 30000
+
+# 向量存储
+vector:
+  faiss:
+    indexPath: ./data/faiss-image-index
+    dimension: 512
+
+# 本地图库
+image:
+  search:
+    top-k: 8
+    threshold: 0.2
+
+logging:
+  level:
+    com.example.artist: DEBUG

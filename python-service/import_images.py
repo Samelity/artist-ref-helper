@@ -80,7 +80,7 @@ def build_index_from_db():
                 "fileName": rec["file_name"],
                 "filePath": rec["file_path"],
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception(f"Skip {rec['file_path']}: {e}")
 
     if not embeddings:

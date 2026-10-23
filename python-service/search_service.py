@@ -1,7 +1,6 @@
 import json
 import os
 import time
-from typing import List
 from pathlib import Path
 
 import faiss
@@ -9,14 +8,13 @@ import numpy as np
 import open_clip
 import torch
 import uvicorn
-import db
-
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel
 
+import db
 from clip_embedding import encode_one
 from logger import logger
 
@@ -84,7 +82,7 @@ class SearchResult(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    items: List[SearchResult]
+    items: list[SearchResult]
 
 
 def _encode_text(text: str) -> np.ndarray:
@@ -151,14 +149,14 @@ def search_by_text(req: TextSearchRequest):
 
 
 @app.post("/search/image", response_model=SearchResponse)
-def search_by_image(file: UploadFile = File(...),
+def search_by_image(file: UploadFile = File(...),  # noqa: B008
                     topK: int = 20,
                     threshold: float = 0.0):
     t0 = time.time()
     try:
         img = Image.open(file.file)
         img.load()  # 提前解码，坏图在这里就抛错，不会污染后续编码
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Invalid image file: {e}")
     vec = _encode_image(img)
     resp = _search(vec, topK, threshold)
@@ -195,7 +193,7 @@ def rebuild_index():
         except FileNotFoundError:
             missing_ids.append(rec["id"])
             logger.warning(f"[自愈] 文件缺失，跳过并解绑: id={rec['id']} path={rec['file_path']}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             missing_ids.append(rec["id"])
             logger.warning(f"[自愈] 文件损坏/读取失败，跳过并解绑: id={rec['id']} err={e}")
 

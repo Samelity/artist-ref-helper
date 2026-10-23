@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import numpy as np
 import torch
-from pathlib import Path
 from PIL import Image
+
 from logger import logger
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -45,7 +47,7 @@ def encode_dir(model, preprocess, image_dir: str, device: str = "cpu"):
             vec = encode_one(model, preprocess, img, device)
             embeddings.append(vec)
             valid_paths.append(str(path))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception(f"Skip {path}: {e}")
 
     if not embeddings:

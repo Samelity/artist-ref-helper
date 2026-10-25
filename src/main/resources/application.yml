@@ -50,4 +50,4 @@ image:
 
 logging:
   level:
-    com.example.artist: DEBUG
+    com.example.artist: INFO

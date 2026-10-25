@@ -3,6 +3,7 @@ package com.example.artist.controller;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.service.ImageService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -13,6 +14,7 @@ import java.util.Map;
 /**
  * 图片检索接口：文搜图、图搜图。
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/images")
 @RequiredArgsConstructor
@@ -27,6 +29,7 @@ public class ImageController {
     public List<ImageEntity> searchByText(@RequestParam String query,
                                           @RequestParam(required = false) Integer topK,
                                           @RequestParam(required = false) Double threshold) {
+        log.info("[HTTP] GET /search/text query={} topK={} threshold={}", query, topK, threshold);
         if (topK != null && threshold != null) {
             return imageService.searchByText(query, topK, threshold);
         }
@@ -38,6 +41,7 @@ public class ImageController {
      */
     @PostMapping("/search/similar")
     public ResponseEntity<?> searchByImage(@RequestParam("file") MultipartFile file) {
+        log.info("[HTTP] POST /search/similar file={} size={}", file.getOriginalFilename(), file.getSize());
         return ResponseEntity.ok(imageService.searchByImage(file));
     }
 
@@ -46,6 +50,7 @@ public class ImageController {
      */
     @PostMapping("/index")
     public ResponseEntity<Map<String, Object>> indexLibrary() {
+        log.info("[HTTP] POST /index 触发索引重建");
         int count = imageService.indexLocalLibrary();
         return ResponseEntity.ok(Map.of("indexedCount", count));
     }

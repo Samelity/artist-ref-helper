@@ -90,6 +90,12 @@
             <button id="imageBtn" onclick="searchByImage()">开始图搜图</button>
             <span class="hint" id="fileNameHint">未选择文件</span>
         </div>
+        <div class="hint" style="margin-top:8px">
+            topK（返回数）
+            <input class="opt" type="number" id="topK_image" value="12" min="1" max="100">
+            threshold（相似度阈值）
+            <input class="opt" type="number" id="threshold_image" value="0.2" min="0" max="1" step="0.05">
+        </div>
     </div>
 
     <div class="status" id="status">输入关键词或选择图片开始检索</div>
@@ -141,13 +147,14 @@
     // ---- 图搜图：POST /api/images/search/similar (multipart file) ----
     async function searchByImage() {
         if (!selectedFile) { statusDiv.textContent = '请先选择一张图片'; return; }
+        const topK = document.getElementById('topK_image').value;
+        const threshold = document.getElementById('threshold_image').value;
         setLoading(true, '图搜图检索中...');
         try {
             const fd = new FormData();
             fd.append('file', selectedFile);
-            const resp = await fetch(`${JAVA_BASE}/api/images/search/similar`, {
-                method: 'POST', body: fd
-            });
+            const url = `${JAVA_BASE}/api/images/search/similar?topK=${encodeURIComponent(topK)}&threshold=${encodeURIComponent(threshold)}`;
+            const resp = await fetch(url, { method: 'POST', body: fd });
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             render(await resp.json());
         } catch (e) {

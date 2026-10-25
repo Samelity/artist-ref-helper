@@ -40,8 +40,14 @@ public class ImageController {
      * 图搜图：上传图片，返回相似图片。
      */
     @PostMapping("/search/similar")
-    public ResponseEntity<?> searchByImage(@RequestParam("file") MultipartFile file) {
-        log.info("[HTTP] POST /search/similar file={} size={}", file.getOriginalFilename(), file.getSize());
+    public ResponseEntity<?> searchByImage(@RequestParam("file") MultipartFile file,
+                                           @RequestParam(required = false) Integer topK,
+                                           @RequestParam(required = false) Double threshold) {
+        log.info("[HTTP] POST /search/similar file={} size={} topK={} threshold={}",
+                file.getOriginalFilename(), file.getSize(), topK, threshold);
+        if (topK != null && threshold != null) {
+            return ResponseEntity.ok(imageService.searchByImage(file, topK, threshold));
+        }
         return ResponseEntity.ok(imageService.searchByImage(file));
     }
 

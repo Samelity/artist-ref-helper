@@ -8,7 +8,7 @@ spring:
     # TIMESTAMPTZ 列建议保留 stringtype=unspecified
     url: jdbc:postgresql://localhost:5432/postgres?stringtype=unspecified
     username: ${DB_USER:postgres}
-    password: ${DB_PASSWORD:postgres}
+    password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
     # HikariCP 连接池（Spring Boot 默认池，显式配置便于生产调优）
     hikari:

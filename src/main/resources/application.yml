@@ -55,6 +55,11 @@ image:
     timeout-seconds: 30            # 搜索接口超时（文搜图/图搜图）
     index-timeout-seconds: 300     # 索引重建超时（编码全量图片 + 建 FAISS）
 
+# 灵感板
+board:
+  export:
+    timeout-seconds: 180           # ZIP 导出 HTTP 请求超时（与 spring.mvc.async.request-timeout 对齐）
+
 # 网络搜图 API Key 由 Python 服务通过环境变量读取：
 #   PIXABAY_API_KEY  - Pixabay 主源
 #   PEXELS_API_KEY   - Pexels 副源

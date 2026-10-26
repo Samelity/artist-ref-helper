@@ -38,19 +38,6 @@ public class ClipConfig {
         return buildWebClient(baseUrl, connectTimeoutMs, (int) (indexTimeoutSeconds * 1000));
     }
 
-    /**
-     * 灵感板导出专用 WebClient：ZIP 打包耗时较长，不设读超时。
-     */
-    @Bean
-    public WebClient boardWebClient(
-            @Value("${clip.service.connect-timeout-ms:3000}") int connectTimeoutMs) {
-        HttpClient httpClient = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs);
-        return WebClient.builder()
-                .clientConnector(new ReactorClientHttpConnector(httpClient))
-                .build();
-    }
-
     private static WebClient buildWebClient(String baseUrl, int connectTimeoutMs, int readTimeoutMs) {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)

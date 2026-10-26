@@ -5,6 +5,7 @@ import re
 import time
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 import faiss
 import numpy as np
@@ -606,10 +607,13 @@ def export_board(board_id: int):
 
     buffer.seek(0)
     filename = f"board-{board_id}-{board['name']}.zip"
+    encoded_filename = quote(filename)
     return StreamingResponse(
         buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+        headers={
+            "Content-Disposition": f"attachment; filename=\"board-{board_id}.zip\"; filename*=UTF-8''{encoded_filename}"
+        },
     )
 
 

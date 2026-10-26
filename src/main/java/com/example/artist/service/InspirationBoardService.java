@@ -8,10 +8,13 @@ import com.example.artist.repository.ImageRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.io.OutputStream;
 import java.util.List;
 
 /**
@@ -108,18 +111,28 @@ public class InspirationBoardService {
     }
 
     /**
-     * 调用 Python 服务生成灵感板图片 ZIP 包。
+     * 校验灵感板是否存在；导出前先检查，避免流式响应开始后无法返回错误状态码。
      */
-    public byte[] exportBoard(Long boardId) {
+    public void assertBoardExists(Long boardId) {
         if (!boardRepository.existsById(boardId)) {
             throw new IllegalArgumentException("Board not found: " + boardId);
         }
+    }
+
+    /**
+     * 调用 Python 服务生成灵感板图片 ZIP 包，流式写入输出流。
+     * 用 DataBuffer 流式转发，避免 bodyToMono(byte[]) 受 256KB maxInMemorySize 限制。
+     */
+    public void writeExportTo(Long boardId, OutputStream outputStream) {
         try {
-            return boardWebClient.get()
-                    .uri(baseUrl + "/boards/{id}/export", boardId)
-                    .retrieve()
-                    .bodyToMono(byte[].class)
+            DataBufferUtils.write(
+                    boardWebClient.get()
+                            .uri(baseUrl + "/boards/{id}/export", boardId)
+                            .retrieve()
+                            .bodyToFlux(DataBuffer.class),
+                    outputStream)
                     .block();
+            outputStream.flush();
         } catch (Exception e) {
             log.error("Board export failed for board {}", boardId, e);
             throw new IllegalStateException("导出灵感板失败: " + e.getMessage());

@@ -34,6 +34,11 @@ spring:
     multipart:
       max-file-size: 20MB
       max-request-size: 20MB
+  mvc:
+    async:
+      # 灵感板 ZIP 导出走 StreamingResponseBody（异步 servlet），
+      # 大文件下载放宽超时，避免默认容器超时中断传输（毫秒）
+      request-timeout: 180000
 
 # CLIP Python 微服务
 clip:

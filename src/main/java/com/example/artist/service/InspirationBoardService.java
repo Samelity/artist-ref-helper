@@ -131,7 +131,7 @@ public class InspirationBoardService {
                             .retrieve()
                             .bodyToFlux(DataBuffer.class),
                     outputStream)
-                    .block();
+                    .blockLast();
             outputStream.flush();
         } catch (Exception e) {
             log.error("Board export failed for board {}", boardId, e);

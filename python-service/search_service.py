@@ -1,7 +1,9 @@
+import io
 import json
 import os
 import re
 import time
+import zipfile
 from pathlib import Path
 
 import faiss
@@ -14,6 +16,7 @@ from deep_translator import BaiduTranslator
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from PIL import Image
 from pydantic import BaseModel
 
@@ -567,6 +570,47 @@ def remote_save(req: SaveRequest):
 
     logger.info(f"[remote] save 完成: saved={saved} skipped={skipped} errors={len(errors)}")
     return SaveResponse(saved=saved, skipped=skipped, errors=errors)
+
+
+# ---------- 灵感板 ----------
+
+@app.get("/boards")
+def list_boards():
+    """查询所有灵感板及其图片。"""
+    boards = db.list_boards()
+    for board in boards:
+        board_images = db.get_board_with_images(board["id"])
+        board["images"] = board_images["images"] if board_images else []
+    return boards
+
+
+@app.get("/boards/{board_id}/export")
+def export_board(board_id: int):
+    """将灵感板中的图片打包为 ZIP 下载。"""
+    board = db.get_board_with_images(board_id)
+    if not board:
+        raise HTTPException(status_code=404, detail=f"Board {board_id} not found")
+
+    images = board.get("images", [])
+    if not images:
+        raise HTTPException(status_code=404, detail="Board has no images")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for img in images:
+            file_path = img["file_path"]
+            if os.path.isfile(file_path):
+                zf.write(file_path, img["file_name"])
+            else:
+                logger.warning(f"[export] 文件缺失: {file_path}")
+
+    buffer.seek(0)
+    filename = f"board-{board_id}-{board['name']}.zip"
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+    )
 
 
 if __name__ == "__main__":

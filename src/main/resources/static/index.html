@@ -73,6 +73,68 @@
         .pagination { margin-top: 14px; display: flex; gap: 8px; justify-content: center; align-items: center; }
         .pagination button { padding: 0 14px; height: 32px; font-size: 13px; }
         .pagination span { font-size: 13px; color: #7f8c8d; }
+
+        /* 灵感板 */
+        .board-layout { display: flex; gap: 18px; }
+        .board-sidebar { width: 280px; flex-shrink: 0; }
+        .board-main { flex: 1; min-width: 0; }
+        .board-create { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+        .board-create input, .board-create textarea { padding: 10px 12px; font-size: 14px;
+                border: 1px solid #ddd; border-radius: 6px; outline: none; font-family: inherit; }
+        .board-create input:focus, .board-create textarea:focus { border-color: #3498db; }
+        .board-create textarea { resize: vertical; min-height: 50px; }
+        .board-create button { align-self: flex-start; }
+        .board-list { display: flex; flex-direction: column; gap: 8px; }
+        .board-item { padding: 12px 14px; background: #f8f9fa; border: 1px solid #e8ecef;
+                      border-radius: 8px; cursor: pointer; transition: .15s; position: relative; }
+        .board-item:hover { background: #eef6fc; border-color: #b8d6f0; }
+        .board-item.active { background: #e8f4fd; border-color: #3498db; }
+        .board-item .bname { font-size: 14px; font-weight: 600; color: #2c3e50; margin-bottom: 3px; }
+        .board-item .bdesc { font-size: 12px; color: #888; white-space: nowrap; overflow: hidden;
+                             text-overflow: ellipsis; }
+        .board-item .bmeta { font-size: 11px; color: #aaa; margin-top: 4px; }
+        .board-item .bdel { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px;
+                            border-radius: 50%; background: none; border: none; color: #ccc;
+                            cursor: pointer; font-size: 14px; padding: 0; display: flex;
+                            align-items: center; justify-content: center; }
+        .board-item .bdel:hover { color: #e74c3c; background: #fde2e2; }
+        .board-detail-header { display: flex; justify-content: space-between; align-items: center;
+                               margin-bottom: 14px; }
+        .board-detail-header h3 { margin: 0; font-size: 16px; color: #2c3e50; }
+        .board-detail-actions { display: flex; gap: 8px; }
+        .board-detail-actions button { height: 32px; padding: 0 14px; font-size: 13px; }
+        .btn-export { background: #27ae60; }
+        .btn-export:hover { background: #219a52; }
+        .btn-remove { background: #e74c3c; }
+        .btn-remove:hover { background: #c0392b; }
+        .board-empty { text-align: center; color: #aaa; padding: 40px 0; font-size: 14px; }
+        .board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
+        .board-card { position: relative; background: #fff; border-radius: 8px; overflow: hidden;
+                      box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+        .board-card img { width: 100%; height: 160px; object-fit: cover; display: block; background: #eee; }
+        .board-card .binfo { padding: 8px 10px; font-size: 12px; color: #555; }
+        .board-card .binfo .bname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .board-card .bremove { position: absolute; top: 6px; right: 6px; width: 24px; height: 24px;
+                               border-radius: 50%; background: rgba(0,0,0,.5); border: none; color: #fff;
+                               cursor: pointer; font-size: 14px; display: flex; align-items: center;
+                               justify-content: center; opacity: 0; transition: opacity .2s; }
+        .board-card:hover .bremove { opacity: 1; }
+        .board-card .bremove:hover { background: #e74c3c; }
+
+        .add-to-board { position: absolute; bottom: 6px; right: 6px; width: 28px; height: 28px;
+                        border-radius: 50%; background: rgba(52,152,219,.85); border: none; color: #fff;
+                        cursor: pointer; font-size: 18px; display: flex; align-items: center;
+                        justify-content: center; opacity: 0; transition: opacity .2s; line-height: 1; }
+        .card:hover .add-to-board { opacity: 1; }
+        .add-to-board:hover { background: #2980b9; }
+        .board-picker { position: fixed; z-index: 100; background: #fff; border-radius: 8px;
+                        box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 8px 0; min-width: 180px; }
+        .board-picker .bp-title { padding: 6px 14px; font-size: 12px; color: #999; border-bottom: 1px solid #eee; }
+        .board-picker .bp-item { padding: 8px 14px; font-size: 13px; cursor: pointer; color: #333; }
+        .board-picker .bp-item:hover { background: #eef6fc; }
+        .board-picker .bp-new { padding: 8px 14px; font-size: 13px; cursor: pointer; color: #3498db;
+                                border-top: 1px solid #eee; }
+        .board-picker .bp-new:hover { background: #eef6fc; }
     </style>
 </head>
 <body>
@@ -88,6 +150,7 @@
         <div class="tab active" data-tab="text" onclick="switchTab('text')">文搜图</div>
         <div class="tab" data-tab="image" onclick="switchTab('image')">图搜图</div>
         <div class="tab" data-tab="pexels" onclick="switchTab('pexels')">网络搜图</div>
+        <div class="tab" data-tab="board" onclick="switchTab('board')">灵感板</div>
     </div>
 
     <!-- 文搜图 -->
@@ -147,6 +210,25 @@
         </div>
     </div>
 
+    <!-- 灵感板 -->
+    <div class="panel" id="panel-board" style="display:none">
+        <div class="board-layout">
+            <div class="board-sidebar">
+                <div class="board-create">
+                    <input type="text" id="boardNameInput" placeholder="灵感板名称">
+                    <textarea id="boardDescInput" placeholder="描述（可选）"></textarea>
+                    <button onclick="createBoard()">创建灵感板</button>
+                </div>
+                <div class="board-list" id="boardList"></div>
+            </div>
+            <div class="board-main">
+                <div id="boardDetail">
+                    <div class="board-empty">选择左侧灵感板查看详情，或创建一个新的灵感板</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="status" id="status">输入关键词或选择图片开始检索</div>
     <div class="grid" id="resultGrid"></div>
 </div>
@@ -164,16 +246,48 @@
     const fileNameHint = document.getElementById('fileNameHint');
     let selectedFile = null;
 
+    // ---- 各 tab 结果缓存：切换 tab 时保存/恢复 ----
+    let currentSearchTab = 'text';
+    const tabResultCache = {};
+
     // ---- Tab 切换 ----
     function switchTab(tab) {
+        // 离开搜索 tab 时缓存当前结果并清空显示
+        if (['text', 'image', 'pexels'].includes(currentSearchTab) && currentSearchTab !== tab) {
+            tabResultCache[currentSearchTab] = {
+                gridHtml: resultGrid.innerHTML,
+                statusText: statusDiv.textContent,
+            };
+            if (['text', 'image', 'pexels'].includes(tab)) {
+                resultGrid.innerHTML = '';
+                statusDiv.textContent = '输入关键词或选择图片开始检索';
+            }
+        }
+        currentSearchTab = tab;
+
         document.querySelectorAll('.tab').forEach(t =>
             t.classList.toggle('active', t.dataset.tab === tab));
         document.getElementById('panel-text').style.display   = tab === 'text'   ? 'block' : 'none';
         document.getElementById('panel-image').style.display  = tab === 'image'  ? 'block' : 'none';
         document.getElementById('panel-pexels').style.display = tab === 'pexels' ? 'block' : 'none';
+        document.getElementById('panel-board').style.display  = tab === 'board'  ? 'block' : 'none';
         if (tab !== 'pexels') {
             document.getElementById('pexelsActions').style.display = 'none';
             document.getElementById('pexelsPagination').style.display = 'none';
+        }
+        if (tab === 'board') {
+            resultGrid.style.display = 'none';
+            statusDiv.style.display = 'none';
+            loadBoardList();
+        } else {
+            resultGrid.style.display = '';
+            statusDiv.style.display = '';
+            // 恢复该 tab 缓存的结果
+            const cached = tabResultCache[tab];
+            if (cached) {
+                resultGrid.innerHTML = cached.gridHtml;
+                statusDiv.textContent = cached.statusText;
+            }
         }
     }
 
@@ -257,7 +371,9 @@
                      <span class="score">相似度 ${score}</span>
                      <span class="fid">faissId ${item.faissId ?? '-'}</span>
                    </div>
-                 </div>`;
+                 </div>
+                 <button class="add-to-board" title="添加到灵感板"
+                         onclick="event.stopPropagation(); showBoardPicker(event, ${item.id})">+</button>`;
             resultGrid.appendChild(card);
         });
     }
@@ -296,7 +412,7 @@
 
     // 回车触发 Pexels 搜索
     document.getElementById('pexelsQuery').addEventListener('keydown', e => {
-        if (e.key === 'Enter') pexelsSearch();
+        if (e.key === 'Enter') remoteSearch();
     });
 
     // ---- 网络搜图（Pixabay / Pexels）----
@@ -424,6 +540,213 @@
 
     function remoteNextPage() {
         if (remotePage < remoteTotalPages) remoteSearch(remotePage + 1);
+    }
+
+    // ---- 灵感板 ----
+    let currentBoardId = null;
+    let boardPickerEl = null;
+
+    async function loadBoardList() {
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/boards`);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const boards = await resp.json();
+            renderBoardList(boards);
+        } catch (e) {
+            console.error('加载灵感板失败:', e);
+        }
+    }
+
+    function renderBoardList(boards) {
+        const list = document.getElementById('boardList');
+        list.innerHTML = '';
+        if (!boards || boards.length === 0) {
+            list.innerHTML = '<div style="text-align:center;color:#aaa;padding:20px;font-size:13px">暂无灵感板</div>';
+            return;
+        }
+        boards.forEach(board => {
+            const item = document.createElement('div');
+            item.className = 'board-item' + (currentBoardId === board.id ? ' active' : '');
+            item.onclick = () => selectBoard(board.id);
+            const imgCount = board.images ? board.images.length : 0;
+            const date = board.createdAt ? new Date(board.createdAt).toLocaleDateString('zh-CN') : '';
+            item.innerHTML =
+                `<button class="bdel" title="删除" onclick="event.stopPropagation(); deleteBoard(${board.id})">×</button>
+                 <div class="bname">${board.name}</div>
+                 <div class="bdesc">${board.description || ''}</div>
+                 <div class="bmeta">${imgCount} 张图片 · ${date}</div>`;
+            list.appendChild(item);
+        });
+    }
+
+    async function createBoard() {
+        const name = document.getElementById('boardNameInput').value.trim();
+        if (!name) { alert('请输入灵感板名称'); return; }
+        const description = document.getElementById('boardDescInput').value.trim();
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/boards`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, description }),
+            });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            document.getElementById('boardNameInput').value = '';
+            document.getElementById('boardDescInput').value = '';
+            await loadBoardList();
+            statusDiv.textContent = '灵感板创建成功';
+        } catch (e) {
+            alert('创建失败: ' + e.message);
+        }
+    }
+
+    async function selectBoard(boardId) {
+        currentBoardId = boardId;
+        await loadBoardList();
+        await renderBoardDetail(boardId);
+    }
+
+    async function renderBoardDetail(boardId) {
+        const detail = document.getElementById('boardDetail');
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/boards/${boardId}`);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const board = await resp.json();
+            detail.innerHTML = `
+                <div class="board-detail-header">
+                    <h3>${board.name}</h3>
+                    <div class="board-detail-actions">
+                        <button class="btn-export" onclick="exportBoard(${board.id})">导出 ZIP</button>
+                    </div>
+                </div>
+                ${board.description ? `<div style="color:#666;font-size:13px;margin-bottom:14px">${board.description}</div>` : ''}
+                ${board.images && board.images.length > 0
+                    ? `<div class="board-grid">${board.images.map(img => `
+                        <div class="board-card">
+                            <img src="${PYTHON_BASE}/api/images/view?path=${encodeURIComponent(img.filePath || '')}"
+                                 alt="${img.fileName || ''}" loading="lazy"
+                                 onerror="this.style.background='#fde2e2'">
+                            <button class="bremove" title="移除" onclick="removeImageFromBoard(${board.id}, ${img.id})">×</button>
+                            <div class="binfo">
+                                <div class="bname" title="${img.fileName || ''}">${img.fileName || '(无文件名)'}</div>
+                            </div>
+                        </div>`).join('')}</div>`
+                    : '<div class="board-empty">灵感板暂无图片，搜索图片后点击 + 按钮添加</div>'
+                }`;
+        } catch (e) {
+            detail.innerHTML = `<div class="board-empty">加载失败: ${e.message}</div>`;
+        }
+    }
+
+    async function deleteBoard(boardId) {
+        if (!confirm('确定要删除这个灵感板吗？')) return;
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/boards/${boardId}`, { method: 'DELETE' });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            if (currentBoardId === boardId) {
+                currentBoardId = null;
+                document.getElementById('boardDetail').innerHTML = '<div class="board-empty">选择左侧灵感板查看详情</div>';
+            }
+            await loadBoardList();
+            statusDiv.textContent = '灵感板已删除';
+        } catch (e) {
+            alert('删除失败: ' + e.message);
+        }
+    }
+
+    async function removeImageFromBoard(boardId, imageId) {
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/boards/${boardId}/images/${imageId}`, { method: 'DELETE' });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            await renderBoardDetail(boardId);
+            await loadBoardList();
+            statusDiv.textContent = '图片已移除';
+        } catch (e) {
+            alert('移除失败: ' + e.message);
+        }
+    }
+
+    async function exportBoard(boardId) {
+        statusDiv.textContent = '正在生成 ZIP...';
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/boards/${boardId}/export`);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const blob = await resp.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `board-${boardId}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            statusDiv.textContent = '导出成功';
+        } catch (e) {
+            alert('导出失败: ' + e.message);
+            statusDiv.textContent = '导出失败';
+        }
+    }
+
+    function showBoardPicker(event, imageId) {
+        closeBoardPicker();
+        const picker = document.createElement('div');
+        picker.className = 'board-picker';
+        picker.innerHTML = '<div class="bp-title">选择灵感板</div>';
+        fetch(`${JAVA_BASE}/api/boards`)
+            .then(r => r.json())
+            .then(boards => {
+                if (boards.length === 0) {
+                    picker.innerHTML += '<div class="bp-item" style="color:#aaa">暂无灵感板</div>';
+                } else {
+                    boards.forEach(board => {
+                        const item = document.createElement('div');
+                        item.className = 'bp-item';
+                        item.textContent = board.name;
+                        item.onclick = () => { addToBoard(board.id, imageId); closeBoardPicker(); };
+                        picker.appendChild(item);
+                    });
+                }
+                const newItem = document.createElement('div');
+                newItem.className = 'bp-new';
+                newItem.textContent = '+ 创建新灵感板';
+                newItem.onclick = () => {
+                    closeBoardPicker();
+                    switchTab('board');
+                };
+                picker.appendChild(newItem);
+            })
+            .catch(() => {
+                picker.innerHTML += '<div class="bp-item" style="color:#e74c3c">加载失败</div>';
+            });
+        const rect = event.target.getBoundingClientRect();
+        picker.style.position = 'fixed';
+        picker.style.left = rect.left + 'px';
+        picker.style.top = (rect.bottom + 4) + 'px';
+        document.body.appendChild(picker);
+        boardPickerEl = picker;
+        setTimeout(() => document.addEventListener('click', closeBoardPickerOutside, { once: true }), 0);
+    }
+
+    function closeBoardPicker() {
+        if (boardPickerEl) {
+            boardPickerEl.remove();
+            boardPickerEl = null;
+        }
+    }
+
+    function closeBoardPickerOutside(e) {
+        if (boardPickerEl && !boardPickerEl.contains(e.target)) {
+            closeBoardPicker();
+        }
+    }
+
+    async function addToBoard(boardId, imageId) {
+        try {
+            const resp = await fetch(`${JAVA_BASE}/api/boards/${boardId}/images/${imageId}`, { method: 'POST' });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            statusDiv.textContent = '已添加到灵感板';
+        } catch (e) {
+            alert('添加失败: ' + e.message);
+        }
     }
 </script>
 </body>

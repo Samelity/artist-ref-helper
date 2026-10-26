@@ -13,9 +13,8 @@ from clip_embedding import IMAGE_EXTS, encode_one
 from logger import logger
 
 # ---------- 配置 ----------
-SOURCE_DIR = os.environ.get("SOURCE_DIR", "C:\\Users\\Uguisu\\Pictures\\素材")  # 原始图片待导入目录
-STORAGE_DIR = os.environ.get("STORAGE_DIR", "images")  # 固定存储目录（图片真正归宿）
-IMAGE_DIR = STORAGE_DIR  # 建索引/服务统一读这个目录
+SOURCE_DIR = os.environ.get("SOURCE_DIR")  # 原始图片待导入目录（必须通过环境变量设置）
+STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")  # 固定存储目录（图片真正归宿）
 INDEX_DIR = "index"
 MODEL_DIR = Path(__file__).parent / "models"  # Chinese-CLIP 模型缓存目录
 MODEL_NAME = "ViT-L-14"
@@ -25,6 +24,9 @@ IDS_PATH = os.path.join(INDEX_DIR, "image_ids.json")
 
 
 def import_images():
+    if not SOURCE_DIR:
+        raise ValueError("SOURCE_DIR environment variable must be set")
+    
     os.makedirs(STORAGE_DIR, exist_ok=True)
     os.makedirs(INDEX_DIR, exist_ok=True)
 

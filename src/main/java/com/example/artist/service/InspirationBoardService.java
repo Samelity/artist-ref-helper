@@ -1,12 +1,16 @@
 package com.example.artist.service;
 
+import com.example.artist.dto.BoardResponse;
 import com.example.artist.model.BoardEntity;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.repository.BoardRepository;
 import com.example.artist.repository.ImageRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import java.util.List;
 
@@ -15,32 +19,133 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class InspirationBoardService {
 
     private final BoardRepository boardRepository;
     private final ImageRepository imageRepository;
+    private final WebClient boardWebClient;
+    private final String baseUrl;
 
-    public BoardEntity create(BoardEntity board) {
-        return boardRepository.save(board);
+    public InspirationBoardService(
+            BoardRepository boardRepository,
+            ImageRepository imageRepository,
+            @Qualifier("boardWebClient") WebClient boardWebClient,
+            @Value("${clip.service.base-url}") String baseUrl) {
+        this.boardRepository = boardRepository;
+        this.imageRepository = imageRepository;
+        this.boardWebClient = boardWebClient;
+        this.baseUrl = baseUrl;
     }
 
-    public List<BoardEntity> listBoards() {
-        return boardRepository.findAll();
+    @Transactional
+    public BoardResponse create(BoardEntity board) {
+        BoardEntity saved = boardRepository.save(board);
+        return toResponse(saved);
     }
 
-    public void addImageToBoard(Long boardId, Long imageId) {
+    public List<BoardResponse> listBoards() {
+        return boardRepository.findAllWithImages().stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    public BoardResponse getBoard(Long boardId) {
+        BoardEntity board = boardRepository.findByIdWithImages(boardId)
+                .orElseThrow(() -> new IllegalArgumentException("Board not found: " + boardId));
+        return toResponse(board);
+    }
+
+    @Transactional
+    public BoardResponse updateBoard(Long boardId, String name, String description) {
         BoardEntity board = boardRepository.findById(boardId)
+                .orElseThrow(() -> new IllegalArgumentException("Board not found: " + boardId));
+        if (name != null) {
+            board.setName(name);
+        }
+        if (description != null) {
+            board.setDescription(description);
+        }
+        return toResponse(boardRepository.save(board));
+    }
+
+    @Transactional
+    public void deleteBoard(Long boardId) {
+        if (!boardRepository.existsById(boardId)) {
+            throw new IllegalArgumentException("Board not found: " + boardId);
+        }
+        boardRepository.deleteById(boardId);
+        log.info("Deleted board {}", boardId);
+    }
+
+    @Transactional
+    public BoardResponse addImageToBoard(Long boardId, Long imageId) {
+        BoardEntity board = boardRepository.findByIdWithImages(boardId)
                 .orElseThrow(() -> new IllegalArgumentException("Board not found: " + boardId));
         ImageEntity image = imageRepository.findById(imageId)
                 .orElseThrow(() -> new IllegalArgumentException("Image not found: " + imageId));
+
+        boolean alreadyPresent = board.getImages().stream()
+                .anyMatch(img -> img.getId().equals(imageId));
+        if (alreadyPresent) {
+            log.info("Image {} already in board {}, skipping", imageId, boardId);
+            return toResponse(board);
+        }
+
         board.getImages().add(image);
         boardRepository.save(board);
         log.info("Added image {} to board {}", imageId, boardId);
+        return toResponse(board);
     }
 
-    public String exportBoard(Long boardId) {
-        // TODO: 将灵感板中的图片导出为 ZIP 或合集清单
-        return "export-url-placeholder";
+    @Transactional
+    public BoardResponse removeImageFromBoard(Long boardId, Long imageId) {
+        BoardEntity board = boardRepository.findByIdWithImages(boardId)
+                .orElseThrow(() -> new IllegalArgumentException("Board not found: " + boardId));
+        board.getImages().removeIf(img -> img.getId().equals(imageId));
+        boardRepository.save(board);
+        log.info("Removed image {} from board {}", imageId, boardId);
+        return toResponse(board);
+    }
+
+    /**
+     * 调用 Python 服务生成灵感板图片 ZIP 包。
+     */
+    public byte[] exportBoard(Long boardId) {
+        if (!boardRepository.existsById(boardId)) {
+            throw new IllegalArgumentException("Board not found: " + boardId);
+        }
+        try {
+            return boardWebClient.get()
+                    .uri(baseUrl + "/boards/{id}/export", boardId)
+                    .retrieve()
+                    .bodyToMono(byte[].class)
+                    .block();
+        } catch (Exception e) {
+            log.error("Board export failed for board {}", boardId, e);
+            throw new IllegalStateException("导出灵感板失败: " + e.getMessage());
+        }
+    }
+
+    private BoardResponse toResponse(BoardEntity board) {
+        List<BoardResponse.BoardImageResponse> imageResponses = board.getImages().stream()
+                .map(img -> new BoardResponse.BoardImageResponse(
+                        img.getId(),
+                        img.getFaissId(),
+                        img.getFileName(),
+                        img.getFilePath(),
+                        img.getSource(),
+                        img.getSourceId(),
+                        img.getSourceUrl(),
+                        img.getPhotographer()
+                ))
+                .toList();
+
+        return new BoardResponse(
+                board.getId(),
+                board.getName(),
+                board.getDescription(),
+                imageResponses,
+                board.getCreatedAt()
+        );
     }
 }

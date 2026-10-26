@@ -2,8 +2,9 @@ package com.example.artist.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,9 +29,15 @@ public class BoardEntity {
     private String description;
 
     @ManyToMany(fetch = FetchType.LAZY)
+    @JoinTable(
+            name = "board_images",
+            joinColumns = @JoinColumn(name = "board_id"),
+            inverseJoinColumns = @JoinColumn(name = "image_id")
+    )
     @Builder.Default
     private List<ImageEntity> images = new ArrayList<>();
 
-    @Builder.Default
-    private LocalDateTime createdAt = LocalDateTime.now();
+    @CreationTimestamp
+    @Column(name = "created_at")
+    private OffsetDateTime createdAt;
 }

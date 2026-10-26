@@ -104,3 +104,34 @@ def get_max_faiss_id() -> int | None:
         cur.execute(sql)
         row = cur.fetchone()
         return row["max_id"] if row else None
+
+
+# ---------- Board 相关 ----------
+
+def list_boards() -> list[dict]:
+    """查询所有灵感板，按创建时间倒序。"""
+    sql = "SELECT id, name, description, created_at FROM boards ORDER BY created_at DESC"
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        return cur.fetchall()
+
+
+def get_board_with_images(board_id: int) -> dict | None:
+    """查询单个灵感板及其关联图片。"""
+    sql = "SELECT id, name, description, created_at FROM boards WHERE id = %s"
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (board_id,))
+        board = cur.fetchone()
+        if not board:
+            return None
+
+        cur.execute(
+            "SELECT ri.id, ri.faiss_id, ri.file_name, ri.file_path, "
+            "ri.source, ri.source_id, ri.source_url, ri.photographer "
+            "FROM reference_image ri "
+            "JOIN board_images bi ON bi.image_id = ri.id "
+            "WHERE bi.board_id = %s",
+            (board_id,),
+        )
+        board["images"] = cur.fetchall()
+        return board

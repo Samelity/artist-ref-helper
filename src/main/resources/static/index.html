@@ -51,6 +51,28 @@
         .mini { height: 34px; padding: 0 16px; font-size: 13px; background: #fff; color: #3498db;
                 border: 1px solid #3498db; }
         .mini:hover { background: #eef6fc; }
+
+        /* 网络搜图 */
+        .pexels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-top: 16px; }
+        .pexels-card { position: relative; background: #fff; border-radius: 8px; overflow: hidden;
+                       box-shadow: 0 2px 6px rgba(0,0,0,.08); cursor: pointer; transition: transform .2s; }
+        .pexels-card:hover { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(0,0,0,.15); }
+        .pexels-card.selected { outline: 3px solid #3498db; }
+        .pexels-card img { width: 100%; height: 180px; object-fit: cover; display: block; background: #eee; }
+        .pexels-info { padding: 8px 10px; font-size: 12px; color: #666; }
+        .pexels-info .photographer { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pexels-check { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px;
+                        background: rgba(255,255,255,.9); border-radius: 50%; display: flex;
+                        align-items: center; justify-content: center; font-size: 16px; color: #3498db;
+                        opacity: 0; transition: opacity .2s; }
+        .pexels-card.selected .pexels-check { opacity: 1; }
+        .pexels-actions { margin-top: 14px; display: flex; gap: 10px; align-items: center; }
+        .pexels-actions .save-btn { background: #27ae60; }
+        .pexels-actions .save-btn:hover { background: #219a52; }
+        .pexels-actions .count { color: #7f8c8d; font-size: 13px; }
+        .pagination { margin-top: 14px; display: flex; gap: 8px; justify-content: center; align-items: center; }
+        .pagination button { padding: 0 14px; height: 32px; font-size: 13px; }
+        .pagination span { font-size: 13px; color: #7f8c8d; }
     </style>
 </head>
 <body>
@@ -65,6 +87,7 @@
     <div class="tabs">
         <div class="tab active" data-tab="text" onclick="switchTab('text')">文搜图</div>
         <div class="tab" data-tab="image" onclick="switchTab('image')">图搜图</div>
+        <div class="tab" data-tab="pexels" onclick="switchTab('pexels')">网络搜图</div>
     </div>
 
     <!-- 文搜图 -->
@@ -98,6 +121,32 @@
         </div>
     </div>
 
+    <!-- 网络搜图 -->
+    <div class="panel" id="panel-pexels" style="display:none">
+        <div class="row">
+            <select class="opt" id="sourceSelect" style="width:120px">
+                <option value="pixabay">Pixabay</option>
+                <option value="pexels">Pexels</option>
+            </select>
+            <input type="text" id="pexelsQuery" placeholder="搜索图片，如：城市夜景、水墨画、星空" value="">
+            <button id="pexelsSearchBtn" onclick="remoteSearch()">搜索</button>
+        </div>
+        <div class="hint">
+            每页数量
+            <input class="opt" type="number" id="pexelsPerPage" value="20" min="5" max="80">
+        </div>
+        <div class="pexels-actions" id="pexelsActions" style="display:none">
+            <button class="save-btn" onclick="remoteSave()">保存选中图片到图库</button>
+            <span class="count" id="pexelsCount">已选 0 张</span>
+        </div>
+        <div class="pexels-grid" id="pexelsGrid"></div>
+        <div class="pagination" id="pexelsPagination" style="display:none">
+            <button onclick="remotePrevPage()">上一页</button>
+            <span id="pexelsPageInfo">第 1 页</span>
+            <button onclick="remoteNextPage()">下一页</button>
+        </div>
+    </div>
+
     <div class="status" id="status">输入关键词或选择图片开始检索</div>
     <div class="grid" id="resultGrid"></div>
 </div>
@@ -119,8 +168,13 @@
     function switchTab(tab) {
         document.querySelectorAll('.tab').forEach(t =>
             t.classList.toggle('active', t.dataset.tab === tab));
-        document.getElementById('panel-text').style.display  = tab === 'text'  ? 'block' : 'none';
-        document.getElementById('panel-image').style.display = tab === 'image' ? 'block' : 'none';
+        document.getElementById('panel-text').style.display   = tab === 'text'   ? 'block' : 'none';
+        document.getElementById('panel-image').style.display  = tab === 'image'  ? 'block' : 'none';
+        document.getElementById('panel-pexels').style.display = tab === 'pexels' ? 'block' : 'none';
+        if (tab !== 'pexels') {
+            document.getElementById('pexelsActions').style.display = 'none';
+            document.getElementById('pexelsPagination').style.display = 'none';
+        }
     }
 
     // ---- 文搜图：GET /api/images/search/text ----
@@ -229,6 +283,8 @@
     function setLoading(on, msg) {
         document.getElementById('textBtn').disabled = on;
         document.getElementById('imageBtn').disabled = on;
+        const pexelsBtn = document.getElementById('pexelsSearchBtn');
+        if (pexelsBtn) pexelsBtn.disabled = on;
         if (on && msg) statusDiv.textContent = msg;
     }
     function fail(msg) { statusDiv.textContent = msg; resultGrid.innerHTML = ''; }
@@ -237,6 +293,138 @@
     document.getElementById('queryInput').addEventListener('keydown', e => {
         if (e.key === 'Enter') searchByText();
     });
+
+    // 回车触发 Pexels 搜索
+    document.getElementById('pexelsQuery').addEventListener('keydown', e => {
+        if (e.key === 'Enter') pexelsSearch();
+    });
+
+    // ---- 网络搜图（Pixabay / Pexels）----
+    let remotePage = 1;
+    let remoteTotalPages = 1;
+    let remoteSelectedPhotos = new Map(); // id -> photo object
+    let remoteSource = 'pixabay';
+
+    async function remoteSearch(page) {
+        const query = document.getElementById('pexelsQuery').value.trim();
+        if (!query) return;
+        const perPage = document.getElementById('pexelsPerPage').value;
+        const source = document.getElementById('sourceSelect').value;
+        remoteSource = source;
+        if (page) remotePage = page;
+
+        setLoading(true, '搜索中...');
+        try {
+            let url;
+            if (source === 'pixabay') {
+                url = `${PYTHON_BASE}/pixabay/search?query=${encodeURIComponent(query)}`
+                    + `&per_page=${perPage}&page=${remotePage}`;
+            } else {
+                url = `${PYTHON_BASE}/pexels/search?query=${encodeURIComponent(query)}`
+                    + `&per_page=${perPage}&page=${remotePage}`;
+            }
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            remoteTotalPages = Math.ceil(data.total_results / perPage) || 1;
+            renderRemoteResults(data.photos, source);
+            document.getElementById('pexelsPagination').style.display = 'flex';
+            document.getElementById('pexelsPageInfo').textContent = `第 ${remotePage} / ${remoteTotalPages} 页（共 ${data.total_results} 张）`;
+            statusDiv.textContent = `找到 ${data.total_results} 张结果`;
+        } catch (e) {
+            fail('搜索失败: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function renderRemoteResults(photos, source) {
+        const grid = document.getElementById('pexelsGrid');
+        grid.innerHTML = '';
+        if (!photos || photos.length === 0) {
+            grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:#999;padding:40px">无结果</div>';
+            return;
+        }
+        photos.forEach(photo => {
+            const card = document.createElement('div');
+            card.className = 'pexels-card' + (remoteSelectedPhotos.has(photo.id) ? ' selected' : '');
+            card.dataset.id = photo.id;
+            card.onclick = () => toggleRemotePhoto(photo, card);
+            // Python 返回的 RemotePhoto 统一用 thumbnail 字段
+            const thumbUrl = photo.thumbnail || '';
+            const imgHtml = thumbUrl
+                ? `<img src="${thumbUrl}" alt="${photo.alt || ''}" loading="lazy" onerror="this.style.background='#fde2e2'">`
+                : `<div style="height:180px;background:#fde2e2;display:flex;align-items:center;justify-content:center;color:#999">无预览</div>`;
+            card.innerHTML =
+                `<div class="pexels-check">&#10003;</div>
+                 ${imgHtml}
+                 <div class="pexels-info">
+                   <div class="photographer" title="${photo.photographer || ''}">
+                     摄影: ${photo.photographer || '未知'}
+                   </div>
+                 </div>`;
+            grid.appendChild(card);
+        });
+    }
+
+    function toggleRemotePhoto(photo, card) {
+        if (remoteSelectedPhotos.has(photo.id)) {
+            remoteSelectedPhotos.delete(photo.id);
+            card.classList.remove('selected');
+        } else {
+            remoteSelectedPhotos.set(photo.id, photo);
+            card.classList.add('selected');
+        }
+        updateRemoteCount();
+    }
+
+    function updateRemoteCount() {
+        const count = remoteSelectedPhotos.size;
+        document.getElementById('pexelsCount').textContent = `已选 ${count} 张`;
+        document.getElementById('pexelsActions').style.display = count > 0 ? 'flex' : 'none';
+    }
+
+    async function remoteSave() {
+        if (remoteSelectedPhotos.size === 0) return;
+        const source = remoteSource;
+        // Python 返回的 RemotePhoto 统一用 url 字段（大图 URL）
+        const photos = Array.from(remoteSelectedPhotos.values()).map(p => ({
+            id: p.id,
+            url: p.url,
+            photographer: p.photographer,
+            source: source,
+        }));
+
+        setLoading(true, `正在保存 ${photos.length} 张图片...`);
+        try {
+            const resp = await fetch(`${PYTHON_BASE}/remote/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ photos }),
+            });
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            statusDiv.textContent = `保存完成: 新增 ${data.saved} 张, 跳过 ${data.skipped} 张` +
+                (data.errors.length > 0 ? `, 失败 ${data.errors.length} 张` : '');
+            if (data.saved > 0) {
+                remoteSelectedPhotos.clear();
+                updateRemoteCount();
+                document.querySelectorAll('.pexels-card.selected').forEach(c => c.classList.remove('selected'));
+            }
+        } catch (e) {
+            fail('保存失败: ' + e.message);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    function remotePrevPage() {
+        if (remotePage > 1) remoteSearch(remotePage - 1);
+    }
+
+    function remoteNextPage() {
+        if (remotePage < remoteTotalPages) remoteSearch(remotePage + 1);
+    }
 </script>
 </body>
 </html>

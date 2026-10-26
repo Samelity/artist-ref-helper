@@ -17,12 +17,28 @@ import java.util.concurrent.TimeUnit;
  */
 @Configuration
 public class ClipConfig {
+
     @Bean
     public WebClient clipWebClient(
             @Value("${clip.service.base-url}") String baseUrl,
             @Value("${clip.service.connect-timeout-ms:3000}") int connectTimeoutMs,
             @Value("${clip.service.read-timeout-ms:30000}") int readTimeoutMs) {
+        return buildWebClient(baseUrl, connectTimeoutMs, readTimeoutMs);
+    }
 
+    /**
+     * 索引重建专用 WebClient：重建耗时长（编码全量图片 + 建 FAISS），
+     * 需要比普通搜索更宽松的读超时。
+     */
+    @Bean
+    public WebClient indexWebClient(
+            @Value("${clip.service.base-url}") String baseUrl,
+            @Value("${clip.service.connect-timeout-ms:3000}") int connectTimeoutMs,
+            @Value("${image.search.index-timeout-seconds:300}") long indexTimeoutSeconds) {
+        return buildWebClient(baseUrl, connectTimeoutMs, (int) (indexTimeoutSeconds * 1000));
+    }
+
+    private static WebClient buildWebClient(String baseUrl, int connectTimeoutMs, int readTimeoutMs) {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
                 .responseTimeout(Duration.ofMillis(readTimeoutMs))

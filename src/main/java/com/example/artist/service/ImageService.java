@@ -3,8 +3,8 @@ package com.example.artist.service;
 import com.example.artist.dto.ClipSearchResponse;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.repository.ImageRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpStatusCode;
@@ -35,11 +35,20 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ImageService {
 
     private final WebClient clipWebClient;
+    private final WebClient indexWebClient;
     private final ImageRepository imageRepository;
+
+    public ImageService(
+            @Qualifier("clipWebClient") WebClient clipWebClient,
+            @Qualifier("indexWebClient") WebClient indexWebClient,
+            ImageRepository imageRepository) {
+        this.clipWebClient = clipWebClient;
+        this.indexWebClient = indexWebClient;
+        this.imageRepository = imageRepository;
+    }
 
     @Value("${image.search.top-k:8}")
     private int topK;
@@ -145,7 +154,7 @@ public class ImageService {
 
         Map<String, Object> resp;
         try {
-            resp = clipWebClient.post()
+            resp = indexWebClient.post()
                     .uri("/index")
                     .retrieve()
                     .onStatus(HttpStatusCode::isError, errorInterceptor("CLIP /index"))

@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 
 import faiss
-import open_clip
+import cn_clip.clip as clip
 import torch
 
 torch.set_num_threads(os.cpu_count())
@@ -17,9 +17,8 @@ SOURCE_DIR = os.environ.get("SOURCE_DIR", "C:\\Users\\Uguisu\\Pictures\\素材")
 STORAGE_DIR = os.environ.get("STORAGE_DIR", "images")  # 固定存储目录（图片真正归宿）
 IMAGE_DIR = STORAGE_DIR  # 建索引/服务统一读这个目录
 INDEX_DIR = "index"
-MODEL_DIR = Path(__file__).parent / "models" / "vit-l-14"
+MODEL_DIR = Path(__file__).parent / "models"  # Chinese-CLIP 模型缓存目录
 MODEL_NAME = "ViT-L-14"
-PRETRAINED = "laion2b_s32b_b82k"
 
 INDEX_PATH = os.path.join(INDEX_DIR, "image_embeddings.faiss")
 IDS_PATH = os.path.join(INDEX_DIR, "image_ids.json")
@@ -55,10 +54,11 @@ def import_images():
 def build_index_from_db():
     """以数据库记录顺序为准建 FAISS，行号即 faiss_id。"""
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, preprocess = open_clip.create_model_from_pretrained(
+    model, preprocess = clip.load_from_name(
         MODEL_NAME,
-        pretrained=str(MODEL_DIR / "open_clip_pytorch_model.bin"),
-        device=device
+        download_root=str(MODEL_DIR),
+        device=device,
+        use_modelscope=True
     )
     model.eval()
 

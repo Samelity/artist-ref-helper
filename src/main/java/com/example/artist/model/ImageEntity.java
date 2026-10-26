@@ -30,9 +30,23 @@ public class ImageEntity {
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
+    /** 图片来源：local / pexels / url */
+    @Column(name = "source")
+    private String source;
+
+    /** 来源平台的图片 ID（如 Pexels photo id） */
+    @Column(name = "source_id")
+    private String sourceId;
+
+    /** 原始下载 URL */
+    @Column(name = "source_url")
+    private String sourceUrl;
+
+    /** 摄影师 / 作者 */
+    @Column(name = "photographer")
+    private String photographer;
+
     /** CLIP 相关度：非数据库列，仅本次检索响应使用。 */
     @Transient
     private Double score;
-
-    // getter / setter 全部生成（getFaissId 返回 Long，供 toEntities 的 Map key 使用）
 }

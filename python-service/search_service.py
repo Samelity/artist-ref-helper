@@ -1,13 +1,16 @@
 import json
 import os
+import re
 import time
 from pathlib import Path
 
 import faiss
 import numpy as np
-import open_clip
+import cn_clip.clip as clip
+import requests
 import torch
 import uvicorn
+from deep_translator import BaiduTranslator
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -20,10 +23,9 @@ from logger import logger
 
 # ---------- 配置 ----------
 MODEL_NAME = "ViT-L-14"
-PRETRAINED = "laion2b_s32b_b82k"
 IMAGE_DIR = os.environ.get("IMAGE_DIR", "images")  # 图库目录归 Python 自己管
 STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")  # 导入脚本真正落图的目录
-MODEL_DIR = Path(__file__).parent / "models" / "vit-l-14"
+MODEL_DIR = Path(__file__).parent / "models"  # Chinese-CLIP 模型缓存目录
 INDEX_PATH = "index/image_embeddings.faiss"
 IDS_PATH = "index/image_ids.json"
 
@@ -36,17 +38,30 @@ CORS_ALLOW_ORIGINS = os.environ.get(
     "CORS_ALLOW_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"
 ).split(",")
 
+# Pexels API 配置
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
+PEXELS_BASE_URL = os.environ.get("PEXELS_BASE_URL", "https://api.pexels.com")
+
+# Pixabay API 配置
+PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
+PIXABAY_BASE_URL = os.environ.get("PIXABAY_BASE_URL", "https://pixabay.com/api")
+
+# 百度翻译 API 配置（用于中文查询转英文）
+# deep-translator 要求环境变量名为 BAIDU_APPID 和 BAIDU_APPKEY
+BAIDU_APP_ID = os.environ.get("BAIDU_APPID", "")
+BAIDU_APP_KEY = os.environ.get("BAIDU_APPKEY", "")
+
 # ---------- 加载资源（进程内只加载一次）----------
 device = "cuda" if torch.cuda.is_available() else "cpu"
-logger.info(f"Loading model on {device} ...")
+logger.info(f"Loading Chinese-CLIP model on {device} ...")
 
-model, preprocess = open_clip.create_model_from_pretrained(
+model, preprocess = clip.load_from_name(
     MODEL_NAME,
-    pretrained=str(MODEL_DIR / "open_clip_pytorch_model.bin"),
-    device=device
+    download_root=str(MODEL_DIR),
+    device=device,
+    use_modelscope=True
 )
 model.eval()
-tokenizer = open_clip.get_tokenizer(MODEL_NAME)
 
 index = faiss.read_index(INDEX_PATH)
 with open(IDS_PATH, "r", encoding="utf-8") as f:
@@ -86,7 +101,7 @@ class SearchResponse(BaseModel):
 
 
 def _encode_text(text: str) -> np.ndarray:
-    tokens = tokenizer([text]).to(device)
+    tokens = clip.tokenize([text]).to(device)
     with torch.no_grad():
         feat = model.encode_text(tokens)
     feat = feat / feat.norm(dim=-1, keepdim=True)
@@ -279,6 +294,279 @@ def view_image(path: str):
 
     # 带缓存头，前端二次加载直接走浏览器缓存，不重复读盘
     return FileResponse(abs_path, headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ---------- 网络搜图：通用模型 ----------
+
+def _is_chinese(text: str) -> bool:
+    """检测文本是否包含中文字符。"""
+    return bool(re.search(r'[\u4e00-\u9fff]', text))
+
+
+def _translate_to_en(text: str) -> str:
+    """中文查询转英文，提升 Pixabay 搜索效果。失败时返回原文。"""
+    if not _is_chinese(text):
+        return text
+    if not BAIDU_APP_ID or not BAIDU_APP_KEY:
+        logger.warning("[translate] 百度翻译未配置，使用原文")
+        return text
+    try:
+        translator = BaiduTranslator(
+            api_key=BAIDU_APP_KEY,
+            app_id=BAIDU_APP_ID,
+            source="zh",
+            target="en"
+        )
+        result = translator.translate(text)
+        if result:
+            logger.info(f"[translate] {text!r} -> {result!r}")
+            return result
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[translate] 翻译失败，使用原文: {e}")
+    return text
+
+
+class RemotePhoto(BaseModel):
+    """统一的远程图片模型，兼容 Pixabay / Pexels 响应。"""
+    id: str
+    url: str
+    thumbnail: str
+    photographer: str | None = None
+    source: str  # "pixabay" | "pexels"
+
+
+class RemoteSearchResponse(BaseModel):
+    photos: list[RemotePhoto]
+    total_results: int
+    page: int
+    per_page: int
+
+
+class SaveItem(BaseModel):
+    id: str
+    url: str
+    photographer: str | None = None
+    source: str  # "pixabay" | "pexels"
+
+
+class SaveRequest(BaseModel):
+    photos: list[SaveItem]
+
+
+class SaveResponse(BaseModel):
+    saved: int
+    skipped: int
+    errors: list[str]
+
+
+# ---------- Pixabay 网络搜图 ----------
+
+class PixabayHit(BaseModel):
+    id: int
+    webformatURL: str
+    largeImageURL: str
+    user: str
+    tags: str | None = None
+
+
+class PixabaySearchResponse(BaseModel):
+    photos: list[RemotePhoto]
+    total_results: int
+    page: int
+    per_page: int
+
+
+@app.get("/pixabay/search", response_model=PixabaySearchResponse)
+def pixabay_search(
+    query: str,
+    per_page: int = 20,
+    page: int = 1,
+    lang: str = "zh",
+):
+    """搜索 Pixabay 图片，返回缩略图列表供前端展示（不下载、不入库）。"""
+    if not PIXABAY_API_KEY:
+        raise HTTPException(status_code=500, detail="PIXABAY_API_KEY not configured")
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="搜索关键词不能为空")
+
+    # 中文查询自动翻译为英文，提升搜索效果
+    search_query = _translate_to_en(query.strip())
+
+    t0 = time.time()
+    try:
+        resp = requests.get(
+            PIXABAY_BASE_URL,
+            params={
+                "key": PIXABAY_API_KEY,
+                "q": search_query,
+                "lang": "en" if search_query != query.strip() else lang,
+                "image_type": "photo",
+                "per_page": per_page,
+                "page": page,
+                "safesearch": "true",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        logger.error(f"[pixabay] 搜索失败: {e}")
+        raise HTTPException(status_code=502, detail=f"Pixabay API 请求失败: {e}")
+
+    hits = data.get("hits", [])
+    photos = [
+        RemotePhoto(
+            id=f"pixabay_{h['id']}",
+            url=h["largeImageURL"],
+            thumbnail=h["webformatURL"],
+            photographer=h.get("user"),
+            source="pixabay",
+        )
+        for h in hits
+    ]
+
+    logger.info(f"[pixabay] search query={query!r},{search_query!r} results={data.get('totalHits', 0)} "
+                f"elapsed={time.time() - t0:.3f}s")
+    return PixabaySearchResponse(
+        photos=photos,
+        total_results=data.get("totalHits", 0),
+        page=page,
+        per_page=per_page,
+    )
+
+
+# ---------- Pexels 网络搜图 ----------
+
+class PexelsSearchResponse(BaseModel):
+    photos: list[RemotePhoto]
+    total_results: int
+    page: int
+    per_page: int
+
+
+@app.get("/pexels/search", response_model=PexelsSearchResponse)
+def pexels_search(
+    query: str,
+    per_page: int = 15,
+    page: int = 1,
+    locale: str = "zh-CN",
+):
+    """搜索 Pexels 图片，返回缩略图列表供前端展示（不下载、不入库）。"""
+    if not PEXELS_API_KEY:
+        raise HTTPException(status_code=500, detail="PEXELS_API_KEY not configured")
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="搜索关键词不能为空")
+
+    t0 = time.time()
+    try:
+        resp = requests.get(
+            f"{PEXELS_BASE_URL}/v1/search",
+            headers={"Authorization": PEXELS_API_KEY},
+            params={"query": query.strip(), "per_page": per_page, "page": page, "locale": locale},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        logger.error(f"[pexels] 搜索失败: {e}")
+        raise HTTPException(status_code=502, detail=f"Pexels API 请求失败: {e}")
+
+    photos = [
+        RemotePhoto(
+            id=f"pexels_{p['id']}",
+            url=p["src"]["original"],
+            thumbnail=p["src"]["medium"],
+            photographer=p.get("photographer"),
+            source="pexels",
+        )
+        for p in data.get("photos", [])
+    ]
+
+    logger.info(f"[pexels] search query={query!r} results={data.get('total_results', 0)} "
+                f"elapsed={time.time() - t0:.3f}s")
+    return PexelsSearchResponse(
+        photos=photos,
+        total_results=data.get("total_results", 0),
+        page=data.get("page", page),
+        per_page=data.get("per_page", per_page),
+    )
+
+
+def _download_image(url: str, save_path: str, timeout: int = 30) -> None:
+    """下载图片到本地文件。"""
+    resp = requests.get(url, stream=True, timeout=timeout)
+    resp.raise_for_status()
+    with open(save_path, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+
+@app.post("/remote/save", response_model=SaveResponse)
+def remote_save(req: SaveRequest):
+    """
+    下载用户选中的远程图片（Pixabay / Pexels），CLIP 编码后增量追加到 FAISS 索引。
+    已存在的 source_id 自动跳过，单张失败不影响其他图片。
+    """
+    if index is None:
+        raise HTTPException(status_code=500, detail="FAISS 索引未初始化，请先重建索引")
+
+    saved, skipped, errors = 0, 0, []
+    next_faiss_id = index.ntotal
+
+    for photo in req.photos:
+        try:
+            if db.exists_by_source_id(photo.id):
+                skipped += 1
+                logger.info(f"[remote] 跳过已存在: {photo.id}")
+                continue
+
+            file_name = f"{photo.id}.jpg"
+            file_path = str(Path(STORAGE_DIR) / file_name)
+            os.makedirs(STORAGE_DIR, exist_ok=True)
+
+            _download_image(photo.url, file_path)
+
+            img = Image.open(file_path)
+            img.load()
+            vec = encode_one(model, preprocess, img, device)
+
+            db_id = db.insert_image_with_source(
+                file_name=file_name,
+                file_path=file_path,
+                source=photo.source,
+                source_id=photo.id,
+                source_url=photo.url,
+                photographer=photo.photographer,
+            )
+
+            index.add(vec)
+            faiss_id = next_faiss_id
+            next_faiss_id += 1
+            db.bind_faiss_ids([(faiss_id, db_id)])
+
+            sid = str(faiss_id)
+            id_map[sid] = {
+                "id": db_id,
+                "fileName": file_name,
+                "filePath": file_path,
+                "source": photo.source,
+                "photographer": photo.photographer,
+            }
+
+            saved += 1
+            logger.info(f"[remote] 已保存: id={db_id} faiss_id={faiss_id} file={file_name}")
+
+        except Exception as e:  # noqa: BLE001
+            err_msg = f"{photo.id}: {e}"
+            errors.append(err_msg)
+            logger.error(f"[remote] 保存失败: {err_msg}")
+
+    faiss.write_index(index, INDEX_PATH)
+    with open(IDS_PATH, "w", encoding="utf-8") as f:
+        json.dump(id_map, f, ensure_ascii=False, indent=2)
+
+    logger.info(f"[remote] save 完成: saved={saved} skipped={skipped} errors={len(errors)}")
+    return SaveResponse(saved=saved, skipped=skipped, errors=errors)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
-images/
+storage/
 models/
 index/

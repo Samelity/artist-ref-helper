@@ -27,15 +27,14 @@ from logger import logger
 
 # ---------- 配置 ----------
 MODEL_NAME = "ViT-L-14"
-IMAGE_DIR = os.environ.get("IMAGE_DIR", "images")  # 图库目录归 Python 自己管
-STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")  # 导入脚本真正落图的目录
+STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")  # 图片存储目录
 MODEL_DIR = Path(__file__).parent / "models"  # Chinese-CLIP 模型缓存目录
 INDEX_PATH = "index/image_embeddings.faiss"
 IDS_PATH = "index/image_ids.json"
 
-# 图片代理允许读取的根目录白名单（真实图片可能落在 IMAGE_DIR 或 STORAGE_DIR）
+# 图片代理允许读取的根目录白名单
 # 用 realpath 归一后存入，校验时做精确路径前缀匹配，杜绝 ../ 目录遍历。
-ALLOWED_ROOTS = [os.path.realpath(p) for p in (IMAGE_DIR, STORAGE_DIR) if p]
+ALLOWED_ROOTS = [os.path.realpath(STORAGE_DIR)] if STORAGE_DIR else []
 
 # 允许跨域访问前端的前端源（Spring Boot 提供 index.html 的地址）
 CORS_ALLOW_ORIGINS = os.environ.get(
@@ -67,11 +66,19 @@ model, preprocess = clip.load_from_name(
 )
 model.eval()
 
-index = faiss.read_index(INDEX_PATH)
-with open(IDS_PATH, "r", encoding="utf-8") as f:
-    id_map = json.load(f)
+# 加载 FAISS 索引，如果不存在则创建空索引
+if os.path.exists(INDEX_PATH) and os.path.exists(IDS_PATH):
+    index = faiss.read_index(INDEX_PATH)
+    with open(IDS_PATH, "r", encoding="utf-8") as f:
+        id_map = json.load(f)
+    logger.info(f"Index loaded: {index.ntotal} vectors, dimension={index.d}")
+else:
+    logger.warning(f"FAISS index not found at {INDEX_PATH}, creating empty index. "
+                   f"Please run import_images.py first to populate the index.")
+    # 创建空的 FAISS 索引（维度 768 对应 ViT-L-14）
+    index = faiss.IndexFlatIP(768)
+    id_map = {}
 
-logger.info(f"Index loaded: {index.ntotal} vectors, dimension={index.d}")
 logger.info("Image Service started successfully")
 
 # ---------- FastAPI ----------

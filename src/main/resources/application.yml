@@ -47,6 +47,14 @@ image:
   search:
     top-k: 20
     threshold: 0.2
+    timeout-seconds: 30            # 搜索接口超时（文搜图/图搜图）
+    index-timeout-seconds: 300     # 索引重建超时（编码全量图片 + 建 FAISS）
+
+# 网络搜图 API Key 由 Python 服务通过环境变量读取：
+#   PIXABAY_API_KEY  - Pixabay 主源
+#   PEXELS_API_KEY   - Pexels 副源
+#   BAIDU_APPID      - 百度翻译 App ID（中文查询转英文）
+#   BAIDU_APPKEY     - 百度翻译密钥
 
 logging:
   level:

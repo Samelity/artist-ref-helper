@@ -69,3 +69,38 @@ def unbind_faiss_ids(ids: list[int]) -> int:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, (ids,))
         return cur.rowcount
+
+
+def insert_image_with_source(
+    file_name: str,
+    file_path: str,
+    source: str = "local",
+    source_id: str | None = None,
+    source_url: str | None = None,
+    photographer: str | None = None,
+) -> int:
+    """插入一条带来源信息的图片记录，返回自增主键 id。"""
+    sql = (
+        "INSERT INTO reference_image (file_name, file_path, source, source_id, source_url, photographer) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id"
+    )
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (file_name, file_path, source, source_id, source_url, photographer))
+        return cur.fetchone()["id"]
+
+
+def exists_by_source_id(source_id: str) -> bool:
+    """检查 source_id 是否已存在（用于 Pexels 去重）。"""
+    sql = "SELECT 1 FROM reference_image WHERE source_id = %s LIMIT 1"
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (source_id,))
+        return cur.fetchone() is not None
+
+
+def get_max_faiss_id() -> int | None:
+    """返回当前最大的 faiss_id，用于增量追加时确定新行号起点。"""
+    sql = "SELECT MAX(faiss_id) AS max_id FROM reference_image"
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        row = cur.fetchone()
+        return row["max_id"] if row else None

@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.util.List;
 import java.util.Map;
@@ -63,12 +64,13 @@ public class BoardController {
     }
 
     @GetMapping("/{boardId}/export")
-    public ResponseEntity<byte[]> export(@PathVariable Long boardId) {
-        byte[] zip = boardService.exportBoard(boardId);
+    public ResponseEntity<StreamingResponseBody> export(@PathVariable Long boardId) {
+        boardService.assertBoardExists(boardId);
+        StreamingResponseBody body = outputStream -> boardService.writeExportTo(boardId, outputStream);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"board-" + boardId + ".zip\"")
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .body(zip);
+                .body(body);
     }
 }

@@ -15,7 +15,6 @@ import torch
 import uvicorn
 from deep_translator import BaiduTranslator
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from PIL import Image
@@ -35,11 +34,6 @@ IDS_PATH = "index/image_ids.json"
 # 图片代理允许读取的根目录白名单
 # 用 realpath 归一后存入，校验时做精确路径前缀匹配，杜绝 ../ 目录遍历。
 ALLOWED_ROOTS = [os.path.realpath(STORAGE_DIR)] if STORAGE_DIR else []
-
-# 允许跨域访问前端的前端源（Spring Boot 提供 index.html 的地址）
-CORS_ALLOW_ORIGINS = os.environ.get(
-    "CORS_ALLOW_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"
-).split(",")
 
 # Pexels API 配置
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "")
@@ -83,15 +77,6 @@ logger.info("Image Service started successfully")
 
 # ---------- FastAPI ----------
 app = FastAPI(title="Reference Image Search")
-
-# 前端(Sprin Boot 8080)直连本服务(8000)时需要 CORS；图片代理同理。
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[o.strip() for o in CORS_ALLOW_ORIGINS if o.strip()],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 class TextSearchRequest(BaseModel):
@@ -625,4 +610,4 @@ def export_board(board_id: int):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)

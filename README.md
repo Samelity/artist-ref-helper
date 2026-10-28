@@ -14,25 +14,19 @@
 ## 技术架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  浏览器 (Vue 3 SPA)           port 8080 / 8000      │
-└──────────┬──────────────────────────┬────────────────┘
-           │ REST API                 │ 图片代理 / 网络搜图
-           ▼                          ▼
-┌─────────────────────┐    HTTP    ┌──────────────────────┐
-│  Spring Boot 3.3.5  │◄──────────►│  Python FastAPI       │
-│  (Java 17, 8080)    │           │  (8000)               │
-│  - JPA / Hibernate  │           │  - Chinese-CLIP ViT-L  │
-│  - WebClient        │           │  - FAISS 向量检索      │
-│  - StreamingBody    │           │  - 图片编码 / 代理      │
-└──────────┬──────────┘           └──────────┬─────────────┘
-           │                                  │
-           ▼                                  ▼
-     ┌───────────┐                     ┌───────────┐
-     │ PostgreSQL │◄───────────────────│  psycopg   │
-     │  (5432)    │                     │  (raw SQL) │
-     └───────────┘                     └───────────┘
+浏览器 (Vue 3 SPA)
+      │  只访问 8080：/api/** 与 /py/**
+      ▼
+Spring Boot (:8080)  ──/py/**──►  Python FastAPI (:8000)
+  ├ 静态页面 (Vue 构建产物)          ├ Chinese-CLIP ViT-L
+  ├ JPA / Hibernate                  ├ FAISS 向量检索
+  └ /py 反向代理（流式转发）          └ 图片服务 / 网络搜图
+      │                                  │
+      ▼                                  ▼
+   PostgreSQL (5432)  ◄───────────  psycopg (raw SQL)
 ```
+
+浏览器只需要访问 Spring Boot（8080）。前端里的 `/py/**` 请求由 Spring Boot 反向代理到 Python（去掉 `/py` 前缀），图片、网络搜图同理，因此生产环境不需要给 Python 开公网端口，也不依赖 CORS。
 
 - **Java 后端**：Spring Boot 提供 REST API、静态页面托管、灵感板 CRUD 和 ZIP 流式导出
 - **Python 微服务**：FastAPI 加载 Chinese-CLIP 模型 + FAISS 索引，提供向量检索、图片代理、网络搜图和批量导入
@@ -134,8 +128,8 @@ npm run build && mvn spring-boot:run
 npm run dev
 ```
 
-> **方式 B** 下 Vite 开发服务器自动代理 `/api` → Spring Boot (8080)、`/py` → Python (8000)，需同时启动两个后端服务。
-> **方式 A** 下构建产物里的图片请求直连 `http://localhost:8000`，依赖 Python 服务的 CORS 白名单（默认已允许 `localhost:8080`）。
+> **方式 B** 下 Vite 开发服务器把 `/api`、`/py` 都代理到 Spring Boot (8080)，再由 Spring Boot 把 `/py/**` 转发给 Python (8000)，与生产方式完全一致，因此启动 Vite 时两个后端服务都要跑。
+> **方式 A** 下浏览器只访问 8080，`/py/**` 由 Spring Boot 转发到 `clip.service.base-url`（默认 `http://127.0.0.1:8000`），与开发环境行为一致。
 
 ### 6. 启动 Spring Boot
 
@@ -156,7 +150,10 @@ artist-ref-helper/
 ├── pom.xml                              # Maven 构建配置
 ├── src/main/java/com/example/artist/
 │   ├── ArtistRefApplication.java        # Spring Boot 入口
-│   ├── config/ClipConfig.java           # WebClient 配置
+│   ├── config/
+│   │   ├── ClipConfig.java              # WebClient 配置
+│   │   ├── PythonProxyConfig.java       # /py 代理注册
+│   │   └── PythonProxyFilter.java       # 流式转发到 Python 服务
 │   ├── controller/
 │   │   ├── ImageController.java         # 图片搜索 API
 │   │   └── BoardController.java         # 灵感板 API
@@ -205,6 +202,9 @@ artist-ref-helper/
 | GET | `/api/images/search/text` | 文搜图（参数：`query`, `topK`, `threshold`） |
 | POST | `/api/images/search/similar` | 图搜图（multipart 上传图片，`topK`, `threshold`） |
 | POST | `/api/images/index` | 重建 FAISS 索引 |
+| ALL | `/py/**` | 反向代理到 Python 服务（去掉 `/py` 前缀，流式转发；仅放行下方白名单） |
+
+`/py` 白名单：`/api/images/view`、`/pixabay/search`、`/pexels/search`、`/remote/save`，其余路径返回 404。
 
 ### 灵感板（Spring Boot :8080）
 
@@ -219,7 +219,7 @@ artist-ref-helper/
 | DELETE | `/api/boards/{boardId}/images/{imageId}` | 从灵感板移除图片 |
 | GET | `/api/boards/{boardId}/export` | 导出灵感板为 ZIP |
 
-### Python 微服务（:8000）
+### Python 微服务（:8000，浏览器经 `/py/**` 访问）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -248,7 +248,8 @@ artist-ref-helper/
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `clip.service.base-url` | `http://localhost:8000` | Python 服务地址 |
+| `clip.service.base-url` | `http://127.0.0.1:8000` | Python 服务地址（Java 直连与 `/py` 代理共用） |
+| `clip.service.proxy-timeout-seconds` | `60` | `/py/**` 代理等待 Python 响应头的超时 |
 | `image.search.top-k` | `20` | 默认返回结果数 |
 | `image.search.threshold` | `0.2` | 相似度阈值 |
 | `image.search.timeout-seconds` | `30` | 搜索超时 |
@@ -273,7 +274,20 @@ java -jar target/artist-ref-helper-0.1.0-SNAPSHOT.jar
 
 浏览器访问 **http://localhost:8080**。
 
-> **只改了 Vue 代码时**：仍然需要重跑上面两步——前端产物固化在 jar 里，`npm run build` 单独跑不会影响已打好的包。日常开发建议用 `npm run dev`（见「快速开始 → 5」），避开打包环节。
+### 两服务部署
+
+生产环境只需两个进程（外加 PostgreSQL）：
+
+| 服务 | 端口 | 对外暴露 | 说明 |
+|------|------|----------|------|
+| Spring Boot（含前端） | 8080 | 是 | 页面、`/api/**`、`/py/**` 代理 |
+| Python FastAPI | 8000 | **否** | 默认绑定 `127.0.0.1`，仅本机可访问；跨机部署时改为 `0.0.0.0` 并用防火墙限制来源 |
+
+1. Python 服务先启动并完成索引（见「快速开始 → 3、4」）。若它与 Spring Boot 不在同一台机器，把 `clip.service.base-url` 改成实际地址。
+2. 前端构建时把 `frontend/.env.production` 里的 `VITE_PYTHON_BASE` 保持为 `/py`（默认值），所有 Python 请求都会经 Spring Boot 转发。
+3. 只对外开放 8080。Python 端口不必暴露，也就不需要配置 CORS 或额外的域名。
+
+> **只改前端时**：仍需 `npm run build` 后重新打包 jar，因为产物固化在 jar 里。
 > **`spring-boot-maven-plugin`** 声明在 [pom.xml](pom.xml) 的 `<build>` 段，负责 `repackage` 出可执行 jar；缺了它 `mvn package` 只会产出 200KB 的普通 jar，`java -jar` 报「没有主清单属性」。
 
 ## 核心模型

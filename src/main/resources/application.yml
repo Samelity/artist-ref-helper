@@ -43,9 +43,11 @@ spring:
 # CLIP Python 微服务
 clip:
   service:
-    base-url: http://localhost:8000
+    base-url: http://127.0.0.1:8000
     connect-timeout-ms: 3000
     read-timeout-ms: 30000
+    # 浏览器 /py/** 请求由 Spring Boot 反向代理到 Python，此为该请求等待响应头的超时
+    proxy-timeout-seconds: 60
 
 # 本地图库
 image:

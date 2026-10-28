@@ -32,3 +32,11 @@ venv/
 storage/
 models/
 index/
+
+# Frontend
+frontend/node_modules/
+frontend/src/components.d.ts
+frontend/src/auto-imports.d.ts
+
+# Vue 构建产物（由 frontend/ 生成，运行 npm run build 即可重建，勿提交）
+src/main/resources/static/

@@ -15,7 +15,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  浏览器 (index.html)          port 8080 / 8000      │
+│  浏览器 (Vue 3 SPA)           port 8080 / 8000      │
 └──────────┬──────────────────────────┬────────────────┘
            │ REST API                 │ 图片代理 / 网络搜图
            ▼                          ▼
@@ -37,7 +37,7 @@
 - **Java 后端**：Spring Boot 提供 REST API、静态页面托管、灵感板 CRUD 和 ZIP 流式导出
 - **Python 微服务**：FastAPI 加载 Chinese-CLIP 模型 + FAISS 索引，提供向量检索、图片代理、网络搜图和批量导入
 - **数据库**：PostgreSQL 存储图片元数据和灵感板关系，Java 通过 JPA、Python 通过 psycopg 共同访问
-- **前端**：原生 HTML/CSS/JS 单页面，无框架依赖
+- **前端**：Vue 3 + Vite + TypeScript + Naive UI + Pinia，构建产物由 Spring Boot 静态托管
 
 ## 环境要求
 
@@ -47,6 +47,7 @@
 | Python | 3.11+ |
 | PostgreSQL | 12+ |
 | Maven | 3.8+ |
+| Node.js | 20+ |
 
 ## 快速开始
 
@@ -70,7 +71,28 @@ set BAIDU_APPKEY=your_baidu_appkey
 
 确保 PostgreSQL 在 `localhost:5432` 运行，数据库名为 `postgres`。表结构由 Hibernate 自动创建（`ddl-auto: update`）。
 
-### 3. 启动 Python 微服务
+### 3. 导入本地图片（首次运行必需）
+
+**首次运行必须执行此步骤**，否则没有可用的 FAISS 索引，搜索将始终返回空结果。
+
+设置环境变量并运行导入脚本：
+
+```bash
+# 设置图片源目录（必需）
+set SOURCE_DIR=C:\path\to\your\images
+
+cd python-service
+python import_images.py
+```
+
+脚本会：
+1. 从 `SOURCE_DIR` 复制图片到 `storage/` 目录
+2. 写入 PostgreSQL 数据库
+3. 用 CLIP 编码图片并构建 FAISS 索引
+
+> **提示**：已有 `storage/` 目录和 `index/` 索引时可跳过此步骤。
+
+### 4. 启动 Python 微服务
 
 ```bash
 cd python-service
@@ -88,37 +110,44 @@ python search_service.py
 
 > **Windows 用户注意**：cn_clip 安装可能需要先安装二进制 wheel，再 `pip install cn_clip --no-deps`。详见 [lmdb 构建问题](https://github.com/OFA-Sys/Chinese-CLIP/issues)。
 
-### 4. 导入本地图片（必需）
+### 5. 构建前端（必需）
 
-**首次启动前必须执行此步骤**，否则 FAISS 索引不存在会导致服务异常。
-
-设置环境变量并运行导入脚本：
+`src/main/resources/static/` 是构建产物，已加入 `.gitignore`、**不入库**，因此克隆项目后必须先构建，否则 Spring Boot 无页面可托管。
 
 ```bash
-# 设置图片源目录（必需）
-set SOURCE_DIR=C:\path\to\your\images
+cd frontend
 
-cd python-service
-python import_images.py
+# 安装依赖（首次）
+npm install
+
+# 生产构建（输出到 src/main/resources/static）
+npm run build
 ```
 
-脚本会：
-1. 从 `SOURCE_DIR` 复制图片到 `storage/` 目录
-2. 写入 PostgreSQL 数据库
-3. 用 CLIP 编码图片并构建 FAISS 索引
+开发时可选择两种方式之一：
 
-> **提示**：如果已有 `storage/` 目录和索引，可跳过此步骤。
+```bash
+# 方式 A：构建后由 Spring Boot 托管，改完代码需重新 npm run build
+npm run build && mvn spring-boot:run
 
-### 5. 启动 Spring Boot
+# 方式 B：Vite 热更新，浏览器访问 http://localhost:5173
+npm run dev
+```
+
+> **方式 B** 下 Vite 开发服务器自动代理 `/api` → Spring Boot (8080)、`/py` → Python (8000)，需同时启动两个后端服务。
+> **方式 A** 下构建产物里的图片请求直连 `http://localhost:8000`，依赖 Python 服务的 CORS 白名单（默认已允许 `localhost:8080`）。
+
+### 6. 启动 Spring Boot
 
 ```bash
 # 项目根目录
 mvn spring-boot:run
 ```
 
-### 6. 访问应用
+### 7. 访问应用
 
-浏览器打开 **http://localhost:8080** 即可使用。
+- 生产构建方式：浏览器打开 **http://localhost:8080**
+- Vite 开发方式：浏览器打开 **http://localhost:5173**
 
 ## 项目结构
 
@@ -140,7 +169,21 @@ artist-ref-helper/
 ├── src/main/resources/
 │   ├── application.yml                  # 应用配置
 │   ├── logback-spring.xml               # 日志配置
-│   └── static/index.html               # 前端单页面
+│   └── static/                          # 前端构建产物（不入库，由 npm run build 生成）
+├── frontend/                            # Vue 3 前端项目
+│   ├── package.json
+│   ├── vite.config.ts                   # Vite 配置（代理、构建输出）
+│   ├── src/
+│   │   ├── main.ts
+│   │   ├── App.vue
+│   │   ├── router/                      # Vue Router 路由
+│   │   ├── stores/                      # Pinia 状态管理
+│   │   ├── api/                         # Axios API 封装
+│   │   ├── types/                       # TypeScript 类型定义
+│   │   ├── views/                       # 页面视图
+│   │   ├── components/                  # 组件
+│   │   └── utils/                       # 工具函数
+│   └── ...
 ├── python-service/
 │   ├── search_service.py                # FastAPI 主服务
 │   ├── clip_embedding.py                # CLIP 模型加载与编码
@@ -211,6 +254,27 @@ artist-ref-helper/
 | `image.search.timeout-seconds` | `30` | 搜索超时 |
 | `image.search.index-timeout-seconds` | `300` | 索引重建超时 |
 | `board.export.timeout-seconds` | `180` | ZIP 导出超时 |
+
+## 打包与部署
+
+前端构建产物会被打进 jar（`BOOT-INF/classes/static/`），所以**打包顺序是先前端、后 Maven**：
+
+```bash
+# 1. 构建前端（产物落到 src/main/resources/static，该目录不入库）
+cd frontend && npm run build && cd ..
+
+# 2. 打包可执行 fat jar（约 59MB，含全部依赖）
+mvn clean package -DskipTests
+
+# 3. 运行
+set DB_PASSWORD=your_postgres_password
+java -jar target/artist-ref-helper-0.1.0-SNAPSHOT.jar
+```
+
+浏览器访问 **http://localhost:8080**。
+
+> **只改了 Vue 代码时**：仍然需要重跑上面两步——前端产物固化在 jar 里，`npm run build` 单独跑不会影响已打好的包。日常开发建议用 `npm run dev`（见「快速开始 → 5」），避开打包环节。
+> **`spring-boot-maven-plugin`** 声明在 [pom.xml](pom.xml) 的 `<build>` 段，负责 `repackage` 出可执行 jar；缺了它 `mvn package` 只会产出 200KB 的普通 jar，`java -jar` 报「没有主清单属性」。
 
 ## 核心模型
 

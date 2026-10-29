@@ -2,7 +2,7 @@
   <article class="image-card">
     <div class="media" title="点击预览" @click="$emit('preview')">
       <img :src="imageUrl(item.filePath)" :alt="item.fileName || ''" loading="lazy" />
-      <span class="score">{{ formatScore(item.score) }}</span>
+      <span v-if="typeof item.score === 'number'" class="score">{{ formatScore(item.score) }}</span>
       <button
         class="add"
         type="button"

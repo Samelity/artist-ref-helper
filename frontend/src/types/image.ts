@@ -5,3 +5,11 @@ export interface ImageItem {
   faissId: number | null
   score?: number
 }
+
+export interface ImagePage {
+  items: ImageItem[]
+  page: number
+  size: number
+  total: number
+  totalPages: number
+}

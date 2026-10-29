@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/text', name: 'text', component: () => import('@/views/TextSearchView.vue') },
     { path: '/image', name: 'image', component: () => import('@/views/ImageSearchView.vue') },
     { path: '/remote', name: 'remote', component: () => import('@/views/RemoteSearchView.vue') },
+    { path: '/library', name: 'library', component: () => import('@/views/LibraryView.vue') },
     { path: '/upload', name: 'upload', component: () => import('@/views/UploadView.vue') },
     { path: '/boards', name: 'boards', component: () => import('@/views/BoardsView.vue') },
     { path: '/boards/:boardId', name: 'board-detail', component: () => import('@/views/BoardsView.vue') },

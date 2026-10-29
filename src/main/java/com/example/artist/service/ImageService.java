@@ -1,12 +1,15 @@
 package com.example.artist.service;
 
 import com.example.artist.dto.ClipSearchResponse;
+import com.example.artist.dto.ImagePageResponse;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.repository.ImageRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
@@ -67,6 +70,12 @@ public class ImageService {
      */
     @Value("${image.search.index-timeout-seconds:300}")
     private long indexTimeoutSeconds;
+
+    /**
+     * 图库浏览每页展示的图片数量。
+     */
+    @Value("${image.browse.page-size}")
+    private int browsePageSize;
 
     // ---------------------------------------------------------------------
     // 对外接口（searchByText / searchByImage / indexLocalLibrary 同 _4，略）
@@ -169,6 +178,29 @@ public class ImageService {
         log.info("索引重建完成: indexedCount={}, 耗时={}ms",
                 count, System.currentTimeMillis() - start);
         return count;
+    }
+
+    /**
+     * 分页浏览图库全部图片，按 FAISS 行号倒序（最新入库在前）。
+     * 页码越界时回落到最后一页，前端因此总能拿到有效数据。
+     */
+    public ImagePageResponse browseLibrary(int page) {
+        int requested = Math.max(page, 1);
+        Page<ImageEntity> result = queryBrowsePage(requested);
+        if (result.getTotalPages() > 0 && requested > result.getTotalPages()) {
+            requested = result.getTotalPages();
+            result = queryBrowsePage(requested);
+        }
+        return new ImagePageResponse(
+                result.getContent(),
+                requested,
+                browsePageSize,
+                result.getTotalElements(),
+                result.getTotalPages());
+    }
+
+    private Page<ImageEntity> queryBrowsePage(int page) {
+        return imageRepository.findAllNewestFirst(PageRequest.of(page - 1, browsePageSize));
     }
 
     // ---------------------------------------------------------------------

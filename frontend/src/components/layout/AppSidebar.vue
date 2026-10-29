@@ -23,6 +23,16 @@
         <span>{{ tab.label }}</span>
       </router-link>
 
+      <p class="nav-label">浏览</p>
+      <router-link
+        to="/library"
+        class="nav-item"
+        :class="{ active: route.name === 'library' }"
+      >
+        <AppIcon name="gallery" :size="18" />
+        <span>图库浏览</span>
+      </router-link>
+
       <p class="nav-label">管理</p>
       <router-link
         to="/upload"

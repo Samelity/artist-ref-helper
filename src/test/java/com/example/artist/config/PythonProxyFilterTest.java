@@ -22,6 +22,7 @@ class PythonProxyFilterTest {
     private HttpServer upstream;
     private final AtomicReference<String> received = new AtomicReference<>();
     private final AtomicReference<String> receivedRange = new AtomicReference<>();
+    private final AtomicReference<String> receivedUpgrade = new AtomicReference<>();
 
     @BeforeEach
     void startUpstream() throws IOException {
@@ -30,6 +31,7 @@ class PythonProxyFilterTest {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             received.set(exchange.getRequestMethod() + " " + exchange.getRequestURI() + " " + body);
             receivedRange.set(exchange.getRequestHeaders().getFirst("Range"));
+            receivedUpgrade.set(exchange.getRequestHeaders().getFirst("Upgrade"));
             byte[] payload = ("upstream:" + body).getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "text/plain;charset=UTF-8");
             exchange.getResponseHeaders().add("X-Ignored", "nope");
@@ -63,6 +65,8 @@ class PythonProxyFilterTest {
 
         assertThat(received.get()).isEqualTo("GET /images/view?path=a%2Fb.png ");
         assertThat(receivedRange.get()).isEqualTo("bytes=0-10");
+        // HTTP/2 的 h2c 升级头会让 Uvicorn 打印 "Unsupported upgrade request"
+        assertThat(receivedUpgrade.get()).isNull();
         assertThat(response.getStatus()).isEqualTo(201);
         assertThat(response.getContentType()).isEqualTo("text/plain;charset=UTF-8");
         assertThat(response.getContentAsString()).isEqualTo("upstream:");

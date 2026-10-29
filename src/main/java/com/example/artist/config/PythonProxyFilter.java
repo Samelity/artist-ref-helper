@@ -62,7 +62,10 @@ public class PythonProxyFilter extends OncePerRequestFilter {
     public PythonProxyFilter(String baseUrl, Duration connectTimeout, Duration requestTimeout) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.requestTimeout = requestTimeout;
+        // 必须固定 HTTP/1.1：默认 HTTP/2 会先发 h2c 升级请求，Uvicorn 不支持并打印
+        // "Unsupported upgrade request" 警告。
         this.httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(connectTimeout)
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();

@@ -33,7 +33,7 @@
       :text="searched ? '无结果，换个关键词试试' : '输入关键词，从 Pixabay / Pexels 搜索参考图'"
     />
 
-    <RemotePagination
+    <PaginationBar
       v-if="totalPages > 0"
       :page="page"
       :total-pages="totalPages"
@@ -49,7 +49,7 @@ import { NButton, useMessage } from 'naive-ui'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import RemoteToolbar from '@/components/remote/RemoteToolbar.vue'
 import RemoteCard from '@/components/remote/RemoteCard.vue'
-import RemotePagination from '@/components/remote/RemotePagination.vue'
+import PaginationBar from '@/components/common/PaginationBar.vue'
 import StatusBar from '@/components/common/StatusBar.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useRemoteSelectionStore } from '@/stores/remoteSelection'

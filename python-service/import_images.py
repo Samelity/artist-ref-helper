@@ -11,16 +11,18 @@ torch.set_num_threads(os.cpu_count())
 import db
 from clip_embedding import IMAGE_EXTS, encode_one
 from logger import logger
+from paths import (
+    IDS_PATH,
+    INDEX_DIR,
+    INDEX_PATH,
+    MODEL_DIR,
+    STORAGE_DIR,
+    resolve_storage_path,
+)
 
 # ---------- 配置 ----------
 SOURCE_DIR = os.environ.get("SOURCE_DIR")  # 原始图片待导入目录（必须通过环境变量设置）
-STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")  # 固定存储目录（图片真正归宿）
-INDEX_DIR = "index"
-MODEL_DIR = Path(__file__).parent / "models"  # Chinese-CLIP 模型缓存目录
 MODEL_NAME = "ViT-L-14"
-
-INDEX_PATH = os.path.join(INDEX_DIR, "image_embeddings.faiss")
-IDS_PATH = os.path.join(INDEX_DIR, "image_ids.json")
 
 
 def import_images():
@@ -39,7 +41,7 @@ def import_images():
     logger.info(f"Found {len(source_files)} images to import from {SOURCE_DIR}")
 
     for src in source_files:
-        dst = Path(STORAGE_DIR) / src.name
+        dst = Path(resolve_storage_path(src.name))
         if not dst.exists():
             shutil.copy2(src, dst)
         # 同一文件名重复导入时去重，避免库里堆积
@@ -47,7 +49,7 @@ def import_images():
         if existing:
             logger.info(f"Skip duplicated {src.name}")
             continue
-        new_id = db.insert_image(src.name, str(dst))
+        new_id = db.insert_image(src.name, src.name)
         logger.info(f"Imported id={new_id} file={src.name}")
 
     build_index_from_db()
@@ -74,7 +76,7 @@ def build_index_from_db():
     for row_idx, rec in enumerate(records):
         try:
             from PIL import Image
-            img = Image.open(rec["file_path"])
+            img = Image.open(resolve_storage_path(rec["file_path"]))
             vec = encode_one(model, preprocess, img, device)
             embeddings.append(vec)
             id_map[str(row_idx)] = {

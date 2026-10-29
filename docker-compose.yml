@@ -1,0 +1,80 @@
+name: artist-ref
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: artist-ref-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  python:
+    build:
+      context: .
+      dockerfile: python-service/Dockerfile
+    image: artist-ref-python:latest
+    container_name: artist-ref-python
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      STORAGE_DIR: /data/storage
+      MODEL_DIR: /data/models
+      INDEX_DIR: /data/index
+      IMPORT_DIR: /import
+      PIXABAY_API_KEY: ${PIXABAY_API_KEY:-}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+      BAIDU_APPID: ${BAIDU_APPID:-}
+      BAIDU_APPKEY: ${BAIDU_APPKEY:-}
+      TZ: Asia/Shanghai
+    volumes:
+      - "D:/artist-data/storage:/data/storage"
+      - "D:/artist-data/index:/data/index"
+      - "D:/artist-data/models:/data/models"
+      - "D:/artist-data/import:/import:ro"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 300s
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: artist-ref-app:latest
+    container_name: artist-ref-app
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      CLIP_SERVICE_BASE_URL: http://python:8000
+      TZ: Asia/Shanghai
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

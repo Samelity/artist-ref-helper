@@ -71,7 +71,7 @@
       <div class="batch-header">
         <div>
           <h3 class="batch-title">局域网批量导入</h3>
-          <p class="batch-desc">将图片通过局域网共享复制到服务器的导入目录，然后点击下方按钮一键入库。</p>
+          <p class="batch-desc">将图片通过局域网共享复制到服务器的导入目录（含子文件夹），然后点击下方按钮一键入库。</p>
         </div>
         <n-button type="primary" :loading="importing" :disabled="importing" @click="doImport">
           开始导入

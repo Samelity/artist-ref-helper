@@ -1,6 +1,6 @@
 # 画师参考图助手 (Artist Reference Helper)
 
-面向画师的 AI 参考图管理工具，基于 Chinese-CLIP 向量检索，支持**文搜图**、**图搜图**、**网络搜图**和**灵感板导出**。
+面向画师的 AI 参考图管理工具，基于 Chinese-CLIP 向量检索，支持**文搜图**、**图搜图**、**网络搜图**、**灵感板管理**和**批量导入**。
 
 ## 功能概览
 
@@ -9,7 +9,8 @@
 | 文搜图 | 输入中/英文文字描述，从本地图库中检索语义相似的参考图 |
 | 图搜图 | 上传或拖入一张图片，检索风格/内容相似的参考图 |
 | 网络搜图 | 从 Pixabay / Pexels 搜索远程图片，一键保存到本地并自动建立索引 |
-| 灵感板 | 创建画板、收集图片、导出为 ZIP 压缩包 |
+| 灵感板 | 创建画板、收集图片，用于归纳和整理参考图 |
+| 批量导入 | 浏览器多选上传，或把图片放进局域网共享目录后一键导入；两者都有实时进度，重复图片自动跳过 |
 
 ## 技术架构
 
@@ -28,8 +29,8 @@ Spring Boot (:8080)  ──/py/**──►  Python FastAPI (:8000)
 
 浏览器只需要访问 Spring Boot（8080）。前端里的 `/py/**` 请求由 Spring Boot 反向代理到 Python（去掉 `/py` 前缀），图片、网络搜图同理，因此生产环境不需要给 Python 开公网端口，也不依赖 CORS。
 
-- **Java 后端**：Spring Boot 提供 REST API、静态页面托管、灵感板 CRUD 和 ZIP 流式导出
-- **Python 微服务**：FastAPI 加载 Chinese-CLIP 模型 + FAISS 索引，提供向量检索、图片代理、网络搜图和批量导入
+- **Java 后端**：Spring Boot 提供 REST API、静态页面托管、灵感板 CRUD，以及 `/py/**` 流式反向代理
+- **Python 微服务**：FastAPI 加载 Chinese-CLIP 模型 + FAISS 索引，提供向量检索、图片代理、网络搜图、批量上传与共享目录导入
 - **数据库**：PostgreSQL 存储图片元数据和灵感板关系，Java 通过 JPA、Python 通过 psycopg 共同访问
 - **前端**：Vue 3 + Vite + TypeScript + Naive UI + Pinia，构建产物由 Spring Boot 静态托管
 
@@ -59,6 +60,9 @@ set PEXELS_API_KEY=your_pexels_key
 # 可选 - 百度翻译（提升中文查询 Pixabay 搜索效果）
 set BAIDU_APPID=your_baidu_appid
 set BAIDU_APPKEY=your_baidu_appkey
+
+# 可选 - 局域网共享目录批量导入（「导入图片」页的共享目录按钮读取此目录）
+set IMPORT_DIR=\\NAS\refs
 ```
 
 ### 2. 启动 PostgreSQL
@@ -204,7 +208,7 @@ artist-ref-helper/
 | POST | `/api/images/index` | 重建 FAISS 索引 |
 | ALL | `/py/**` | 反向代理到 Python 服务（去掉 `/py` 前缀，流式转发；仅放行下方白名单） |
 
-`/py` 白名单：`/api/images/view`、`/pixabay/search`、`/pexels/search`、`/remote/save`，其余路径返回 404。
+`/py` 白名单：`/images/view`、`/pixabay/search`、`/pexels/search`、`/remote/save`、`/upload`、`/upload/status`、`/import`、`/import/status`，其余路径返回 404。
 
 ### 灵感板（Spring Boot :8080）
 
@@ -217,7 +221,17 @@ artist-ref-helper/
 | DELETE | `/api/boards/{boardId}` | 删除灵感板 |
 | POST | `/api/boards/{boardId}/images/{imageId}` | 添加图片到灵感板 |
 | DELETE | `/api/boards/{boardId}/images/{imageId}` | 从灵感板移除图片 |
-| GET | `/api/boards/{boardId}/export` | 导出灵感板为 ZIP |
+
+### 批量导入（浏览器经 `/py/**` 访问）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/py/upload` | 上传多张本地图片（multipart，后台处理） |
+| GET | `/py/upload/status` | 上传进度（前端 500ms 轮询） |
+| POST | `/py/import` | 从 `IMPORT_DIR` 共享目录批量导入 |
+| GET | `/py/import/status` | 共享目录导入进度 |
+
+两个接口都是异步任务：POST 立即返回，实际转换在后台线程执行，同一时刻只允许一个任务（重复提交返回 409）。文件名已存在于 `storage/` 的图片会被跳过并在 `skipped` 中计数。
 
 ### Python 微服务（:8000，浏览器经 `/py/**` 访问）
 
@@ -226,10 +240,12 @@ artist-ref-helper/
 | GET | `/health` | 健康检查（返回索引向量数） |
 | POST | `/search/text` | CLIP 文字检索 |
 | POST | `/search/image` | CLIP 图片检索 |
-| GET | `/api/images/view` | 图片文件代理 |
+| GET | `/images/view` | 图片文件代理 |
 | GET | `/pixabay/search` | Pixabay 网络搜图 |
 | GET | `/pexels/search` | Pexels 网络搜图 |
-| POST | `/remote/save` | 保存远程图片并编码入库 |
+| POST | `/remote/save` | 保存远程图片并编码入库（仅允许 Pixabay / Pexels 域名） |
+| POST | `/upload` | 批量上传本地图片（`/upload/status` 查进度） |
+| POST | `/import` | 从 `IMPORT_DIR` 批量导入（`/import/status` 查进度） |
 
 ## 配置说明
 
@@ -243,18 +259,18 @@ artist-ref-helper/
 | Pexels Key | `PEXELS_API_KEY` | - | Pexels API 密钥 |
 | 百度翻译 ID | `BAIDU_APPID` | - | 中译英 App ID |
 | 百度翻译密钥 | `BAIDU_APPKEY` | - | 中译英密钥 |
+| 共享导入目录 | `IMPORT_DIR` | - | 共享目录批量导入的来源目录（可选） |
 
 关键应用参数：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `clip.service.base-url` | `http://127.0.0.1:8000` | Python 服务地址（Java 直连与 `/py` 代理共用） |
-| `clip.service.proxy-timeout-seconds` | `60` | `/py/**` 代理等待 Python 响应头的超时 |
+| `clip.service.proxy-timeout-seconds` | `300` | `/py/**` 代理等待 Python 响应头的超时（批量上传时 CLIP 编码较慢，故放宽） |
 | `image.search.top-k` | `20` | 默认返回结果数 |
 | `image.search.threshold` | `0.2` | 相似度阈值 |
 | `image.search.timeout-seconds` | `30` | 搜索超时 |
 | `image.search.index-timeout-seconds` | `300` | 索引重建超时 |
-| `board.export.timeout-seconds` | `180` | ZIP 导出超时 |
 
 ## 打包与部署
 

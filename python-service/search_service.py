@@ -1,11 +1,12 @@
-import io
+import asyncio
 import json
 import os
 import re
+import shutil
+import threading
 import time
-import zipfile
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import urlparse
 
 import faiss
 import numpy as np
@@ -14,19 +15,19 @@ import requests
 import torch
 import uvicorn
 from deep_translator import BaiduTranslator
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
-from fastapi.responses import StreamingResponse
 from PIL import Image
 from pydantic import BaseModel
 
 import db
-from clip_embedding import encode_one
+from clip_embedding import IMAGE_EXTS, encode_one
 from logger import logger
 
 # ---------- 配置 ----------
 MODEL_NAME = "ViT-L-14"
 STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")  # 图片存储目录
+IMPORT_DIR = os.environ.get("IMPORT_DIR")  # 局域网共享导入目录（可选）
 MODEL_DIR = Path(__file__).parent / "models"  # Chinese-CLIP 模型缓存目录
 INDEX_PATH = "index/image_embeddings.faiss"
 IDS_PATH = "index/image_ids.json"
@@ -161,8 +162,8 @@ def search_by_text(req: TextSearchRequest):
 
 @app.post("/search/image", response_model=SearchResponse)
 def search_by_image(file: UploadFile = File(...),  # noqa: B008
-                    topK: int = 20,
-                    threshold: float = 0.0):
+                    topK: int = Form(20),
+                    threshold: float = Form(0.0)):
     t0 = time.time()
     try:
         img = Image.open(file.file)
@@ -269,7 +270,7 @@ def _is_allowed(abs_path: str) -> bool:
     return False
 
 
-@app.get("/api/images/view")
+@app.get("/images/view")
 def view_image(path: str):
     """
     图片代理接口：解决浏览器无法直接访问本地绝对路径的安全限制。
@@ -488,6 +489,18 @@ def pexels_search(
     )
 
 
+# 只允许从图库官方 CDN 下载，避免 /remote/save 被改造成任意 URL 抓取入口
+ALLOWED_IMAGE_HOSTS = ("pixabay.com", "pexels.com")
+
+
+def _is_allowed_image_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    return any(host == d or host.endswith("." + d) for d in ALLOWED_IMAGE_HOSTS)
+
+
 def _download_image(url: str, save_path: str, timeout: int = 30) -> None:
     """下载图片到本地文件。"""
     resp = requests.get(url, stream=True, timeout=timeout)
@@ -511,6 +524,11 @@ def remote_save(req: SaveRequest):
 
     for photo in req.photos:
         try:
+            if not _is_allowed_image_url(photo.url):
+                errors.append(f"{photo.id}: 不支持的图片来源域名")
+                logger.warning(f"[remote] 拒绝非图库域名: {photo.url}")
+                continue
+
             if db.exists_by_source_id(photo.id):
                 skipped += 1
                 logger.info(f"[remote] 跳过已存在: {photo.id}")
@@ -565,6 +583,277 @@ def remote_save(req: SaveRequest):
     return SaveResponse(saved=saved, skipped=skipped, errors=errors)
 
 
+# ---------- 本地图片上传 ----------
+
+_upload_progress = {
+    "running": False,
+    "current": 0,
+    "total": 0,
+    "current_file": "",
+    "saved": 0,
+    "skipped": 0,
+    "errors": [],
+}
+_upload_lock = threading.Lock()
+
+
+class UploadResponse(BaseModel):
+    total: int
+    message: str
+
+
+@app.post("/upload", response_model=UploadResponse)
+async def upload_images(files: list[UploadFile] = File(...), bg: BackgroundTasks = None):  # noqa: B008
+    """
+    批量上传本地图片（后台处理）。
+    先读取所有文件数据，再交给后台线程保存、编码、入库。
+    前端通过 GET /upload/status 轮询进度。
+    """
+    if index is None:
+        raise HTTPException(status_code=500, detail="FAISS 索引未初始化，请先重建索引")
+
+    with _upload_lock:
+        if _upload_progress["running"]:
+            raise HTTPException(status_code=409, detail="上传任务正在执行中")
+
+    file_data: list[tuple[str, bytes]] = []
+    for f in files:
+        data = await f.read()
+        file_data.append((f.filename or "unknown.jpg", data))
+
+    if not file_data:
+        return UploadResponse(total=0, message="没有收到文件")
+
+    with _upload_lock:
+        _upload_progress.update(
+            running=True, current=0, total=len(file_data),
+            current_file="", saved=0, skipped=0, errors=[],
+        )
+
+    bg.add_task(_run_upload, file_data)
+    return UploadResponse(total=len(file_data), message=f"开始上传 {len(file_data)} 张图片")
+
+
+async def _run_upload(file_data: list[tuple[str, bytes]]):
+    """后台线程处理上传文件：保存 → CLIP 编码 → 入库 → 追加 FAISS。"""
+    global index, id_map
+
+    def _do_upload():
+        global index, id_map
+
+        try:
+            saved, skipped, errors = 0, 0, []
+            next_faiss_id = index.ntotal
+            os.makedirs(STORAGE_DIR, exist_ok=True)
+
+            for i, (original_name, content) in enumerate(file_data):
+                with _upload_lock:
+                    _upload_progress["current"] = i + 1
+                    _upload_progress["current_file"] = original_name
+
+                suffix = Path(original_name).suffix.lower()
+                if suffix not in IMAGE_EXTS:
+                    with _upload_lock:
+                        _upload_progress["errors"] = _upload_progress["errors"] + [f"{original_name}: 不支持的格式"]
+                    continue
+
+                try:
+                    stem = Path(original_name).stem
+                    file_name = f"{stem}{suffix}"
+                    file_path = str(Path(STORAGE_DIR) / file_name)
+
+                    if os.path.exists(file_path):
+                        skipped += 1
+                        with _upload_lock:
+                            _upload_progress["skipped"] = skipped
+                        logger.info(f"[upload] 跳过已存在: {file_name}")
+                        continue
+
+                    with open(file_path, "wb") as f:
+                        f.write(content)
+
+                    img = Image.open(file_path)
+                    img.load()
+                    vec = encode_one(model, preprocess, img, device)
+
+                    db_id = db.insert_image(file_name=file_name, file_path=file_path)
+
+                    index.add(vec)
+                    faiss_id = next_faiss_id
+                    next_faiss_id += 1
+                    db.bind_faiss_ids([(faiss_id, db_id)])
+
+                    id_map[str(faiss_id)] = {
+                        "id": db_id,
+                        "fileName": file_name,
+                        "filePath": file_path,
+                    }
+
+                    saved += 1
+                    with _upload_lock:
+                        _upload_progress["saved"] = saved
+                    logger.info(f"[upload] 已导入: id={db_id} faiss_id={faiss_id} file={file_name}")
+
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{original_name}: {e}")
+                    with _upload_lock:
+                        _upload_progress["errors"] = list(errors)
+                    logger.error(f"[upload] 导入失败: {original_name}: {e}")
+
+            if saved > 0:
+                faiss.write_index(index, INDEX_PATH)
+                with open(IDS_PATH, "w", encoding="utf-8") as f:
+                    json.dump(id_map, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"[upload] 完成: saved={saved} skipped={skipped} errors={len(errors)}")
+        finally:
+            with _upload_lock:
+                _upload_progress["running"] = False
+
+    await asyncio.to_thread(_do_upload)
+
+
+@app.get("/upload/status")
+def upload_status():
+    """返回当前上传进度，前端轮询此接口。"""
+    with _upload_lock:
+        return dict(_upload_progress)
+
+
+# ---------- 共享目录批量导入 ----------
+
+_import_progress = {
+    "running": False,
+    "current": 0,
+    "total": 0,
+    "current_file": "",
+    "imported": 0,
+    "skipped": 0,
+    "errors": [],
+}
+_import_lock = threading.Lock()
+
+
+class ImportResponse(BaseModel):
+    total: int
+    message: str
+
+
+@app.post("/import", response_model=ImportResponse)
+def import_from_directory(bg: BackgroundTasks):
+    """
+    从 IMPORT_DIR 共享目录批量导入图片（后台执行）。
+    前端通过 GET /import/status 轮询进度。
+    """
+    if not IMPORT_DIR:
+        raise HTTPException(status_code=500, detail="IMPORT_DIR 未配置")
+    if not os.path.isdir(IMPORT_DIR):
+        raise HTTPException(status_code=400, detail=f"导入目录不存在: {IMPORT_DIR}")
+
+    with _import_lock:
+        if _import_progress["running"]:
+            raise HTTPException(status_code=409, detail="导入任务正在执行中")
+
+    source_dir = Path(IMPORT_DIR)
+    source_files = sorted(
+        p for p in source_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+    )
+    if not source_files:
+        return ImportResponse(total=0, message="导入目录中没有找到图片文件")
+
+    with _import_lock:
+        _import_progress.update(
+            running=True, current=0, total=len(source_files),
+            current_file="", imported=0, skipped=0, errors=[],
+        )
+
+    bg.add_task(_run_import, source_files)
+    return ImportResponse(total=len(source_files), message=f"开始导入 {len(source_files)} 张图片")
+
+
+async def _run_import(source_files: list[Path]):
+    """后台线程执行实际导入，逐文件更新进度。"""
+    global index, id_map
+
+    def _do_import():
+        global index, id_map
+
+        try:
+            if index is None:
+                index = faiss.IndexFlatIP(768)
+                id_map = {}
+
+            imported, skipped, errors = 0, 0, []
+            next_faiss_id = index.ntotal
+            os.makedirs(STORAGE_DIR, exist_ok=True)
+
+            for i, src in enumerate(source_files):
+                with _import_lock:
+                    _import_progress["current"] = i + 1
+                    _import_progress["current_file"] = src.name
+
+                try:
+                    file_name = src.name
+                    file_path = str(Path(STORAGE_DIR) / file_name)
+
+                    if os.path.exists(file_path):
+                        skipped += 1
+                        with _import_lock:
+                            _import_progress["skipped"] = skipped
+                        logger.info(f"[import] 跳过已存在: {file_name}")
+                        continue
+
+                    shutil.copy2(str(src), file_path)
+
+                    img = Image.open(file_path)
+                    img.load()
+                    vec = encode_one(model, preprocess, img, device)
+
+                    db_id = db.insert_image(file_name=file_name, file_path=file_path)
+
+                    index.add(vec)
+                    faiss_id = next_faiss_id
+                    next_faiss_id += 1
+                    db.bind_faiss_ids([(faiss_id, db_id)])
+
+                    id_map[str(faiss_id)] = {
+                        "id": db_id,
+                        "fileName": file_name,
+                        "filePath": file_path,
+                    }
+
+                    imported += 1
+                    with _import_lock:
+                        _import_progress["imported"] = imported
+                    logger.info(f"[import] 已导入: id={db_id} faiss_id={faiss_id} file={file_name}")
+
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{src.name}: {e}")
+                    with _import_lock:
+                        _import_progress["errors"] = list(errors)
+                    logger.error(f"[import] 导入失败: {src.name}: {e}")
+
+            if imported > 0:
+                faiss.write_index(index, INDEX_PATH)
+                with open(IDS_PATH, "w", encoding="utf-8") as f:
+                    json.dump(id_map, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"[import] 完成: imported={imported} skipped={skipped} errors={len(errors)}")
+        finally:
+            with _import_lock:
+                _import_progress["running"] = False
+
+    await asyncio.to_thread(_do_import)
+
+
+@app.get("/import/status")
+def import_status():
+    """返回当前导入进度，前端轮询此接口。"""
+    with _import_lock:
+        return dict(_import_progress)
+
+
 # ---------- 灵感板 ----------
 
 @app.get("/boards")
@@ -575,38 +864,6 @@ def list_boards():
         board_images = db.get_board_with_images(board["id"])
         board["images"] = board_images["images"] if board_images else []
     return boards
-
-
-@app.get("/boards/{board_id}/export")
-def export_board(board_id: int):
-    """将灵感板中的图片打包为 ZIP 下载。"""
-    board = db.get_board_with_images(board_id)
-    if not board:
-        raise HTTPException(status_code=404, detail=f"Board {board_id} not found")
-
-    images = board.get("images", [])
-    if not images:
-        raise HTTPException(status_code=404, detail="Board has no images")
-
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for img in images:
-            file_path = img["file_path"]
-            if os.path.isfile(file_path):
-                zf.write(file_path, img["file_name"])
-            else:
-                logger.warning(f"[export] 文件缺失: {file_path}")
-
-    buffer.seek(0)
-    filename = f"board-{board_id}-{board['name']}.zip"
-    encoded_filename = quote(filename)
-    return StreamingResponse(
-        buffer,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f"attachment; filename=\"board-{board_id}.zip\"; filename*=UTF-8''{encoded_filename}"
-        },
-    )
 
 
 if __name__ == "__main__":

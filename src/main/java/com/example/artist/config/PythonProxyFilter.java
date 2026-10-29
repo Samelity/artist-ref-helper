@@ -36,10 +36,14 @@ public class PythonProxyFilter extends OncePerRequestFilter {
 
     /** 只放行前端实际使用的接口，避免把整个 Python 服务挂到公网入口上。 */
     private static final Set<String> ALLOWED_PATHS = Set.of(
-            "/api/images/view",
+            "/images/view",
             "/pixabay/search",
             "/pexels/search",
-            "/remote/save");
+            "/remote/save",
+            "/upload",
+            "/upload/status",
+            "/import",
+            "/import/status");
 
     private static final Set<String> FORWARDED_REQUEST_HEADERS = Set.of(
             "accept", "accept-language", "content-type", "range",
@@ -137,8 +141,8 @@ public class PythonProxyFilter extends OncePerRequestFilter {
             return HttpRequest.BodyPublishers.noBody();
         }
         long length = request.getContentLengthLong();
-        if (length < 0) {
-            return HttpRequest.BodyPublishers.ofInputStream(() -> uncheckedInputStream(request));
+        if (length <= 0) {
+            return HttpRequest.BodyPublishers.noBody();
         }
         return HttpRequest.BodyPublishers.fromPublisher(
                 HttpRequest.BodyPublishers.ofInputStream(() -> uncheckedInputStream(request)), length);

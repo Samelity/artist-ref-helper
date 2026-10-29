@@ -742,7 +742,7 @@ class ImportResponse(BaseModel):
 @app.post("/import", response_model=ImportResponse)
 def import_from_directory(bg: BackgroundTasks):
     """
-    从 IMPORT_DIR 共享目录批量导入图片（后台执行）。
+    从 IMPORT_DIR 共享目录递归导入所有子文件夹中的图片（后台执行）。
     前端通过 GET /import/status 轮询进度。
     """
     if not IMPORT_DIR:
@@ -755,24 +755,29 @@ def import_from_directory(bg: BackgroundTasks):
             raise HTTPException(status_code=409, detail="导入任务正在执行中")
 
     source_dir = Path(IMPORT_DIR)
-    source_files = sorted(
-        p for p in source_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+    # 递归扫描所有子目录；用相对路径作为入库文件名，避免不同子目录中的同名文件互相覆盖
+    relative_files = sorted(
+        (
+            p.relative_to(source_dir)
+            for p in source_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+        ),
+        key=lambda p: p.as_posix().lower(),
     )
-    if not source_files:
-        return ImportResponse(total=0, message="导入目录中没有找到图片文件")
+    if not relative_files:
+        return ImportResponse(total=0, message="导入目录（含子文件夹）中没有找到图片文件")
 
     with _import_lock:
         _import_progress.update(
-            running=True, current=0, total=len(source_files),
+            running=True, current=0, total=len(relative_files),
             current_file="", imported=0, skipped=0, errors=[],
         )
 
-    bg.add_task(_run_import, source_files)
-    return ImportResponse(total=len(source_files), message=f"开始导入 {len(source_files)} 张图片")
+    bg.add_task(_run_import, source_dir, relative_files)
+    return ImportResponse(total=len(relative_files), message=f"开始导入 {len(relative_files)} 张图片")
 
 
-async def _run_import(source_files: list[Path]):
+async def _run_import(source_dir: Path, relative_files: list[Path]):
     """后台线程执行实际导入，逐文件更新进度。"""
     global index, id_map
 
@@ -788,14 +793,14 @@ async def _run_import(source_files: list[Path]):
             next_faiss_id = index.ntotal
             os.makedirs(STORAGE_DIR, exist_ok=True)
 
-            for i, src in enumerate(source_files):
+            for i, rel in enumerate(relative_files):
+                file_name = rel.as_posix()
                 with _import_lock:
                     _import_progress["current"] = i + 1
-                    _import_progress["current_file"] = src.name
+                    _import_progress["current_file"] = file_name
 
                 try:
-                    file_name = src.name
-                    file_path = str(Path(STORAGE_DIR) / file_name)
+                    file_path = str(Path(STORAGE_DIR) / rel)
 
                     if os.path.exists(file_path):
                         skipped += 1
@@ -804,7 +809,8 @@ async def _run_import(source_files: list[Path]):
                         logger.info(f"[import] 跳过已存在: {file_name}")
                         continue
 
-                    shutil.copy2(str(src), file_path)
+                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                    shutil.copy2(str(source_dir / rel), file_path)
 
                     img = Image.open(file_path)
                     img.load()
@@ -829,10 +835,10 @@ async def _run_import(source_files: list[Path]):
                     logger.info(f"[import] 已导入: id={db_id} faiss_id={faiss_id} file={file_name}")
 
                 except Exception as e:  # noqa: BLE001
-                    errors.append(f"{src.name}: {e}")
+                    errors.append(f"{file_name}: {e}")
                     with _import_lock:
                         _import_progress["errors"] = list(errors)
-                    logger.error(f"[import] 导入失败: {src.name}: {e}")
+                    logger.error(f"[import] 导入失败: {file_name}: {e}")
 
             if imported > 0:
                 faiss.write_index(index, INDEX_PATH)

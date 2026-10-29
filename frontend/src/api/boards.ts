@@ -29,8 +29,3 @@ export async function removeImageFromBoard(boardId: number, imageId: number): Pr
   const resp = await javaHttp.delete<Board>(`/api/boards/${boardId}/images/${imageId}`)
   return resp.data
 }
-
-export async function exportBoard(boardId: number): Promise<Blob> {
-  const resp = await javaHttp.get(`/api/boards/${boardId}/export`, { responseType: 'blob' })
-  return resp.data
-}

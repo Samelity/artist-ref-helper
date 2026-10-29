@@ -23,6 +23,16 @@
         <span>{{ tab.label }}</span>
       </router-link>
 
+      <p class="nav-label">管理</p>
+      <router-link
+        to="/upload"
+        class="nav-item"
+        :class="{ active: route.name === 'upload' }"
+      >
+        <AppIcon name="upload" :size="18" />
+        <span>导入图片</span>
+      </router-link>
+
       <p class="nav-label">收藏</p>
       <router-link
         to="/boards"

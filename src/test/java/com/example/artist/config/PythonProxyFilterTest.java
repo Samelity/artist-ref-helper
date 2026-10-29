@@ -53,7 +53,7 @@ class PythonProxyFilterTest {
 
     @Test
     void forwardsMethodPathQueryAndHeaders() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/py/api/images/view");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/py/images/view");
         request.setQueryString("path=a%2Fb.png");
         request.addHeader("Range", "bytes=0-10");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -61,7 +61,7 @@ class PythonProxyFilterTest {
 
         filter().doFilter(request, response, chain);
 
-        assertThat(received.get()).isEqualTo("GET /api/images/view?path=a%2Fb.png ");
+        assertThat(received.get()).isEqualTo("GET /images/view?path=a%2Fb.png ");
         assertThat(receivedRange.get()).isEqualTo("bytes=0-10");
         assertThat(response.getStatus()).isEqualTo(201);
         assertThat(response.getContentType()).isEqualTo("text/plain;charset=UTF-8");

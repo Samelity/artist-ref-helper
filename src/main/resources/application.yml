@@ -32,13 +32,8 @@ spring:
           time_zone: UTC
   servlet:
     multipart:
-      max-file-size: 20MB
-      max-request-size: 20MB
-  mvc:
-    async:
-      # 灵感板 ZIP 导出走 StreamingResponseBody（异步 servlet），
-      # 大文件下载放宽超时，避免默认容器超时中断传输（毫秒）
-      request-timeout: 180000
+      max-file-size: 50MB
+      max-request-size: 500MB
 
 # CLIP Python 微服务
 clip:
@@ -47,7 +42,8 @@ clip:
     connect-timeout-ms: 3000
     read-timeout-ms: 30000
     # 浏览器 /py/** 请求由 Spring Boot 反向代理到 Python，此为该请求等待响应头的超时
-    proxy-timeout-seconds: 60
+    # 批量上传 + CLIP 编码耗时较长，放宽到 300s
+    proxy-timeout-seconds: 300
 
 # 本地图库
 image:
@@ -56,11 +52,6 @@ image:
     threshold: 0.2
     timeout-seconds: 30            # 搜索接口超时（文搜图/图搜图）
     index-timeout-seconds: 300     # 索引重建超时（编码全量图片 + 建 FAISS）
-
-# 灵感板
-board:
-  export:
-    timeout-seconds: 180           # ZIP 导出 HTTP 请求超时（与 spring.mvc.async.request-timeout 对齐）
 
 # 网络搜图 API Key 由 Python 服务通过环境变量读取：
 #   PIXABAY_API_KEY  - Pixabay 主源

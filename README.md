@@ -9,6 +9,7 @@
 | 文搜图 | 输入中/英文文字描述，从本地图库中检索语义相似的参考图 |
 | 图搜图 | 上传或拖入一张图片，检索风格/内容相似的参考图 |
 | 网络搜图 | 从 Pixabay / Pexels 搜索远程图片，一键保存到本地并自动建立索引 |
+| 图库浏览 | 分页浏览本地图库全部图片（每页 20 张），按入库顺序倒序，最新图片在前 |
 | 灵感板 | 创建画板、收集图片，用于归纳和整理参考图 |
 | 批量导入 | 浏览器多选上传，或把图片放进局域网共享目录（含子文件夹，自动递归）后一键导入；两者都有实时进度，重复图片自动跳过 |
 
@@ -205,6 +206,7 @@ artist-ref-helper/
 |------|------|------|
 | GET | `/api/images/search/text` | 文搜图（参数：`query`, `topK`, `threshold`） |
 | POST | `/api/images/search/similar` | 图搜图（multipart 上传图片，`topK`, `threshold`） |
+| GET | `/api/images/browse` | 图库浏览（参数：`page`，每页 20 张，按 FAISS 行号倒序） |
 | POST | `/api/images/index` | 重建 FAISS 索引 |
 | ALL | `/py/**` | 反向代理到 Python 服务（去掉 `/py` 前缀，流式转发；仅放行下方白名单） |
 
@@ -257,11 +259,15 @@ artist-ref-helper/
 |--------|----------|--------|------|
 | 数据库密码 | `DB_PASSWORD` | - | PostgreSQL 密码（必需） |
 | 数据库用户 | `DB_USER` | `postgres` | PostgreSQL 用户名 |
+| 图片存储目录 | `STORAGE_DIR` | `python-service/storage` | 图片实际存放目录；数据库只保存相对该目录的路径 |
+| 索引目录 | `INDEX_DIR` | `python-service/index` | FAISS 索引与 id 映射目录（`INDEX_PATH`/`IDS_PATH` 由它派生） |
+| 模型目录 | `MODEL_DIR` | `python-service/models` | Chinese-CLIP 模型缓存目录 |
 | Pixabay Key | `PIXABAY_API_KEY` | - | Pixabay API 密钥 |
 | Pexels Key | `PEXELS_API_KEY` | - | Pexels API 密钥 |
 | 百度翻译 ID | `BAIDU_APPID` | - | 中译英 App ID |
 | 百度翻译密钥 | `BAIDU_APPKEY` | - | 中译英密钥 |
 | 共享导入目录 | `IMPORT_DIR` | - | 共享目录批量导入的来源目录（可选） |
+| Python 服务地址 | `CLIP_SERVICE_BASE_URL` | `http://127.0.0.1:8000` | 覆盖 `clip.service.base-url`（容器内指向 `http://python:8000`） |
 
 关键应用参数：
 

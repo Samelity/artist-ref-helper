@@ -6,7 +6,8 @@ spring:
     name: artist-ref-helper
   datasource:
     # TIMESTAMPTZ 列建议保留 stringtype=unspecified
-    url: jdbc:postgresql://localhost:5432/postgres?stringtype=unspecified
+    # 数据库名可用 DB_NAME 覆盖，未设置时沿用 postgres（与 python-service/db.py 一致）
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:postgres}?stringtype=unspecified
     username: ${DB_USER:postgres}
     password: ${DB_PASSWORD}
     driver-class-name: org.postgresql.Driver
@@ -38,7 +39,8 @@ spring:
 # CLIP Python 微服务
 clip:
   service:
-    base-url: http://127.0.0.1:8000
+    # 本地开发直连 Python；容器内由 compose 注入 http://python:8000
+    base-url: ${CLIP_SERVICE_BASE_URL:http://127.0.0.1:8000}
     connect-timeout-ms: 3000
     read-timeout-ms: 30000
     # 浏览器 /py/** 请求由 Spring Boot 反向代理到 Python，此为该请求等待响应头的超时
@@ -47,6 +49,8 @@ clip:
 
 # 本地图库
 image:
+  browse:
+    page-size: 20                  # 图库浏览每页图片数
   search:
     top-k: 20
     threshold: 0.2

@@ -1,5 +1,6 @@
 package com.example.artist.controller;
 
+import com.example.artist.dto.ImagePageResponse;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.service.ImageService;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +50,15 @@ public class ImageController {
             return ResponseEntity.ok(imageService.searchByImage(file, topK, threshold));
         }
         return ResponseEntity.ok(imageService.searchByImage(file));
+    }
+
+    /**
+     * 分页浏览图库全部图片，按 FAISS 行号倒序（最新入库在前）。
+     */
+    @GetMapping("/browse")
+    public ImagePageResponse browse(@RequestParam(defaultValue = "1") int page) {
+        log.info("[HTTP] GET /browse page={}", page);
+        return imageService.browseLibrary(page);
     }
 
     /**

@@ -23,14 +23,17 @@ from pydantic import BaseModel
 import db
 from clip_embedding import IMAGE_EXTS, encode_one
 from logger import logger
+from paths import (
+    IDS_PATH,
+    IMPORT_DIR,
+    INDEX_PATH,
+    MODEL_DIR,
+    STORAGE_DIR,
+    resolve_storage_path,
+)
 
 # ---------- 配置 ----------
 MODEL_NAME = "ViT-L-14"
-STORAGE_DIR = os.environ.get("STORAGE_DIR", "storage")  # 图片存储目录
-IMPORT_DIR = os.environ.get("IMPORT_DIR")  # 局域网共享导入目录（可选）
-MODEL_DIR = Path(__file__).parent / "models"  # Chinese-CLIP 模型缓存目录
-INDEX_PATH = "index/image_embeddings.faiss"
-IDS_PATH = "index/image_ids.json"
 
 # 图片代理允许读取的根目录白名单
 # 用 realpath 归一后存入，校验时做精确路径前缀匹配，杜绝 ../ 目录遍历。
@@ -197,7 +200,7 @@ def rebuild_index():
     vectors, valid_records, missing_ids = [], [], []
     for rec in records:
         try:
-            img = Image.open(rec["file_path"])
+            img = Image.open(resolve_storage_path(rec["file_path"]))
             img.load()
             vec = encode_one(model, preprocess, img, device)
             vectors.append(vec)
@@ -280,7 +283,7 @@ def view_image(path: str):
         raise HTTPException(status_code=400, detail="Missing path")
 
     # realpath 会解析 ../ 与软链，得到规范绝对路径后再比对白名单
-    abs_path = os.path.realpath(path)
+    abs_path = resolve_storage_path(path)
 
     if not _is_allowed(abs_path):
         logger.warning(f"[view] 拒绝越权访问: {path} -> {abs_path}")
@@ -535,18 +538,18 @@ def remote_save(req: SaveRequest):
                 continue
 
             file_name = f"{photo.id}.jpg"
-            file_path = str(Path(STORAGE_DIR) / file_name)
+            abs_path = resolve_storage_path(file_name)
             os.makedirs(STORAGE_DIR, exist_ok=True)
 
-            _download_image(photo.url, file_path)
+            _download_image(photo.url, abs_path)
 
-            img = Image.open(file_path)
+            img = Image.open(abs_path)
             img.load()
             vec = encode_one(model, preprocess, img, device)
 
             db_id = db.insert_image_with_source(
                 file_name=file_name,
-                file_path=file_path,
+                file_path=file_name,
                 source=photo.source,
                 source_id=photo.id,
                 source_url=photo.url,
@@ -562,7 +565,7 @@ def remote_save(req: SaveRequest):
             id_map[sid] = {
                 "id": db_id,
                 "fileName": file_name,
-                "filePath": file_path,
+                "filePath": file_name,
                 "source": photo.source,
                 "photographer": photo.photographer,
             }
@@ -660,23 +663,23 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                 try:
                     stem = Path(original_name).stem
                     file_name = f"{stem}{suffix}"
-                    file_path = str(Path(STORAGE_DIR) / file_name)
+                    abs_path = resolve_storage_path(file_name)
 
-                    if os.path.exists(file_path):
+                    if os.path.exists(abs_path):
                         skipped += 1
                         with _upload_lock:
                             _upload_progress["skipped"] = skipped
                         logger.info(f"[upload] 跳过已存在: {file_name}")
                         continue
 
-                    with open(file_path, "wb") as f:
+                    with open(abs_path, "wb") as f:
                         f.write(content)
 
-                    img = Image.open(file_path)
+                    img = Image.open(abs_path)
                     img.load()
                     vec = encode_one(model, preprocess, img, device)
 
-                    db_id = db.insert_image(file_name=file_name, file_path=file_path)
+                    db_id = db.insert_image(file_name=file_name, file_path=file_name)
 
                     index.add(vec)
                     faiss_id = next_faiss_id
@@ -686,7 +689,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                     id_map[str(faiss_id)] = {
                         "id": db_id,
                         "fileName": file_name,
-                        "filePath": file_path,
+                        "filePath": file_name,
                     }
 
                     saved += 1
@@ -800,23 +803,23 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
                     _import_progress["current_file"] = file_name
 
                 try:
-                    file_path = str(Path(STORAGE_DIR) / rel)
+                    abs_path = resolve_storage_path(file_name)
 
-                    if os.path.exists(file_path):
+                    if os.path.exists(abs_path):
                         skipped += 1
                         with _import_lock:
                             _import_progress["skipped"] = skipped
                         logger.info(f"[import] 跳过已存在: {file_name}")
                         continue
 
-                    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                    shutil.copy2(str(source_dir / rel), file_path)
+                    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                    shutil.copy2(str(source_dir / rel), abs_path)
 
-                    img = Image.open(file_path)
+                    img = Image.open(abs_path)
                     img.load()
                     vec = encode_one(model, preprocess, img, device)
 
-                    db_id = db.insert_image(file_name=file_name, file_path=file_path)
+                    db_id = db.insert_image(file_name=file_name, file_path=file_name)
 
                     index.add(vec)
                     faiss_id = next_faiss_id
@@ -826,7 +829,7 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
                     id_map[str(faiss_id)] = {
                         "id": db_id,
                         "fileName": file_name,
-                        "filePath": file_path,
+                        "filePath": file_name,
                     }
 
                     imported += 1

@@ -25,7 +25,7 @@ def query_one(sql, params=None):
 
 
 def insert_image(file_name: str, file_path: str) -> int:
-    """插入一条图片元数据，返回自增主键 id。"""
+    """插入一条图片元数据，返回自增主键 id。file_path 为相对 STORAGE_DIR 的路径。"""
     sql = (
         "INSERT INTO reference_image (file_name, file_path) "
         "VALUES (%s, %s) RETURNING id"
@@ -79,7 +79,7 @@ def insert_image_with_source(
     source_url: str | None = None,
     photographer: str | None = None,
 ) -> int:
-    """插入一条带来源信息的图片记录，返回自增主键 id。"""
+    """插入一条带来源信息的图片记录，返回自增主键 id。file_path 为相对 STORAGE_DIR 的路径。"""
     sql = (
         "INSERT INTO reference_image (file_name, file_path, source, source_id, source_url, photographer) "
         "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id"

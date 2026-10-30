@@ -1,5 +1,5 @@
 import { javaHttp } from './http'
-import type { ImageItem } from '@/types/image'
+import type { ImageItem, ImagePage } from '@/types/image'
 
 export interface SearchByTextParams {
   query: string
@@ -23,5 +23,10 @@ export async function searchByImage(file: File, topK?: number, threshold?: numbe
 
 export async function rebuildIndex(): Promise<{ indexedCount: number }> {
   const resp = await javaHttp.post<{ indexedCount: number }>('/api/images/index')
+  return resp.data
+}
+
+export async function browseImages(page = 1): Promise<ImagePage> {
+  const resp = await javaHttp.get<ImagePage>('/api/images/browse', { params: { page } })
   return resp.data
 }

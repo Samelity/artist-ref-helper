@@ -9,7 +9,7 @@
 >
 > 路径不同时，请同步修改 `docker-compose.yml` 里的 volumes。
 >
-> 仓库已提供 `docker-compose.yml`；第 3 章其余 Docker 文件（两个 Dockerfile、`.dockerignore`、`.env.example`）仍需按内容创建。代码本身无需修改，直接构建即可。
+> 仓库已提供全部构建文件（两个 Dockerfile、`.dockerignore`、`.env.example`、`.gitattributes`），克隆后按第 3、5 章直接构建即可，不需要手动创建或修改。代码本身无需修改。
 
 ---
 
@@ -152,141 +152,50 @@ url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:postgres}?
 
 ---
 
-## 3. 新增 Docker 文件
+## 3. Docker 构建文件（仓库已提供）
 
-在项目根目录创建以下文件。文件内容可以直接使用，注意保持 YAML 缩进。
+以下文件已随仓库提供，克隆后即可直接构建。本节只说明各自的作用和排障要点，内容以仓库文件为准——按手册手抄容易和仓库版本不一致。如果部署机是拷文件而不是 clone，记得把这几个文件一起拷过去，并保持 LF 换行。
 
 ### 3.1 `.dockerignore`
 
-位置：`D:\artist-ref-helper\.dockerignore`
+仓库根目录已提供。它排除了四类内容：
 
-```dockerignore
-# 版本与 IDE
-.git
-.gitignore
-.idea
-.vscode
-**/*.iml
+- 版本与 IDE 文件：`.git`、`.idea`、`.vscode`、`*.iml`；
+- 构建产物：`target`、`src/main/resources/static`（后者由前端阶段重新生成）；
+- 运行期数据：`logs`、`storage`、`models`、`index`（含 `python-service/` 下的同名目录）、`docs`、`vibe_images`；
+- 依赖与缓存：`frontend/node_modules`、`__pycache__`、虚拟环境，以及 `.env` 和日志。
 
-# 构建产物
-target
-src/main/resources/static
-
-# 运行期数据（绝不能进镜像）
-logs
-docs
-vibe_images
-storage
-models
-index
-python-service/storage
-python-service/index
-python-service/models
-python-service/logs
-
-# Python
-**/__pycache__
-**/*.pyc
-**/.venv
-**/venv
-
-# 前端依赖
-frontend/node_modules
-
-# 密钥
-.env
-
-# 日志
-*.log
-```
-
-> 注意：`.gitignore` 对 Docker 构建上下文**无效**。如果不写 `.dockerignore`，`python-service\models`（1.6 GB）、`frontend\node_modules`、`storage` 等都会被发送给 Docker，构建会非常慢。
+> 注意：`.gitignore` 对 Docker 构建上下文**无效**。缺少 `.dockerignore` 时，`python-service/models`（1.6 GB）、`frontend/node_modules`、`storage` 里的图片都会被发送给 Docker，构建极慢；更严重的是 Python 镜像里的 `COPY python-service/ ./` 会把这些数据一起复制进镜像层。
+> 以后仓库新增顶层数据目录时，记得同步加进 `.dockerignore`，否则镜像会悄悄变大。
 
 ### 3.2 根目录 `Dockerfile`
 
-位置：`D:\artist-ref-helper\Dockerfile`
+仓库根目录已提供，分三个阶段：
 
-```dockerfile
-# syntax=docker/dockerfile:1
+1. `frontend`（`node:22-slim`）：先复制 `package.json` / `package-lock.json` 执行 `npm ci`，再复制源码执行 `npm run build`。Vite 的产物输出到 `src/main/resources/static`。
+2. `backend`（`maven:3.9-eclipse-temurin-17`）：先只复制 `pom.xml` 执行 `dependency:go-offline`，再把 `src` 和前端产物复制进来执行 `mvn package`。
+3. 运行（`eclipse-temurin:17-jre`）：只放 jar，镜像里只有一个 Java 进程。
 
-# ---------- 1. 构建前端 ----------
-FROM node:22-slim AS frontend
-WORKDIR /build/frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend/ ./
-RUN npm run build && test -f /build/src/main/resources/static/index.html
+要点：
 
-# ---------- 2. 构建 Spring Boot jar ----------
-FROM maven:3.9-eclipse-temurin-17 AS backend
-WORKDIR /build
-COPY pom.xml ./
-COPY src ./src
-COPY --from=frontend /build/src/main/resources/static ./src/main/resources/static
-RUN mvn -B clean package -DskipTests
-
-# ---------- 3. 运行 ----------
-FROM eclipse-temurin:17-jre
-WORKDIR /app
-COPY --from=backend /build/target/artist-ref-helper-*.jar ./app.jar
-ENV TZ=Asia/Shanghai
-EXPOSE 8080
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
-```
-
-说明：
-
-- 前端构建产物由 Vite 输出到 `src/main/resources/static`，再复制进 Maven 构建目录，最终打进 jar，所以镜像里只有一个 Java 进程。
-- `test -f .../index.html` 是为了在前端构建异常时尽早失败，避免打出一个没有页面的 jar。
+- 两个构建阶段都把依赖目录挂到 BuildKit 构建缓存（npm 的 `/root/.npm`、Maven 的 `/root/.m2`）。只改前端时，`npm ci` 命中原层，Maven 依赖从缓存读取，不会再从 Maven Central 重新下载——这是重建速度的关键。
+- 依赖层只由 `pom.xml` 决定，改 Java 源码或前端不会让它失效。
+- `npm run build` 后面的 `test -f .../static/index.html` 用于在前端构建异常时尽早失败，避免打出没有页面的 jar。
 - 运行镜像不需要 Node 和 Maven，最终镜像只包含 JRE 和 jar。
 
 ### 3.3 `python-service/Dockerfile`
 
-位置：`D:\artist-ref-helper\python-service\Dockerfile`
+仓库已提供。流程是：装运行库 → 只复制 `requirements.txt` 安装依赖 → 复制 `python-service/` 代码 → 用 `uvicorn` 命令行启动。
 
-```dockerfile
-FROM python:3.11-slim
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    TZ=Asia/Shanghai
-
-# libgomp1 / libgl1 / libglib2.0-0：torch、faiss、Pillow 的运行库
-# build-essential + patch：cn_clip 固定依赖 lmdb==1.3.0，该版本没有 cp311 的 Linux wheel，
-# 必须从源码编译，py-lmdb 的打包脚本需要 patch 和 C 编译器
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        libgomp1 \
-        libgl1 \
-        libglib2.0-0 \
-        tzdata \
-        build-essential \
-        patch \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY python-service/requirements.txt ./
-# 装完立即卸载编译工具，避免最终镜像多出几百 MB（同一 RUN 内删除不计入镜像层）
-RUN pip install --upgrade pip && pip install -r requirements.txt \
-    && apt-get purge -y --auto-remove build-essential patch \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY python-service/ ./
-
-EXPOSE 8000
-
-# 必须只开 1 个 worker：FAISS 索引和 id_map 是进程内内存对象，多 worker 会各存一份且不同步
-CMD ["uvicorn", "search_service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
-```
-
-说明：
+要点：
 
 - 基础镜像用 Python 3.11，与 `requirements.txt` 的注释一致。
 - `libgomp1` 是 torch/faiss 需要的 OpenMP 运行库；`libgl1`/`libglib2.0-0` 给 Pillow/torchvision 用。
-- `build-essential` 和 `patch` 只在 `pip install` 阶段需要（编译 lmdb），装完就 `purge`，不会被带进最终镜像；不装会报 `sh: 1: /usr/bin/patch: not found`。
+- `build-essential` 和 `patch` 只在 `pip install` 阶段需要（编译 lmdb），装完就在同一 RUN 内 `purge`，不会被带进最终镜像；不装会报 `sh: 1: /usr/bin/patch: not found`。
+- pip 缓存挂在 BuildKit 构建缓存（`/root/.cache/pip`），缓存目录不进镜像层，最终镜像体积不变；`requirements.txt` 改动后重装只需下载变化的部分。
 - 不使用 `python search_service.py` 启动，因为代码里绑定的是 `127.0.0.1`；命令行参数覆盖为 `0.0.0.0`。
 - `COPY python-service/ ./` 只决定代码位置（`/app`）。图片、索引、模型目录全部由 compose 的 `STORAGE_DIR` / `INDEX_DIR` / `MODEL_DIR` 指定为 `/data/**`，与代码目录、工作目录都解耦。
+- 只开 1 个 worker：FAISS 索引和 id_map 是进程内内存对象，多 worker 会各存一份且不同步。
 
 > 注意：首次 `pip install` 会下载 CPU 版 torch，耗时较长；国内网络慢时可以先在开发机把镜像构建好再 `docker save` 过去（见附录 B）。
 
@@ -408,27 +317,16 @@ volumes:
 
 ### 3.5 `.env`
 
-位置：`D:\artist-ref-helper\.env.example`（模板，可入库），实际运行用同目录的 `.env`（不可入库）。
+仓库已提供 `.env.example` 模板（用 `CHANGE_ME` 占位），不需要新建；实际运行用的是同目录下的 `.env`（不可入库）。
 
-新建 `.env.example`，内容如下：
+模板分四组：
 
-```dotenv
-# ===== 数据库（必填）=====
-# 首次启动时 PostgreSQL 会用它初始化；之后改这里不会自动改已有库
-DB_NAME=artist_ref
-DB_USER=artist
-DB_PASSWORD=ArtistRef_2026_ChangeMe
+- 数据库（必填）：`DB_NAME` / `DB_USER` / `DB_PASSWORD`；
+- pgAdmin 登录（必填）：`PGADMIN_EMAIL` / `PGADMIN_PASSWORD`；
+- 网络搜图（可选）：`PIXABAY_API_KEY` / `PEXELS_API_KEY`；
+- 百度翻译（可选）：`BAIDU_APPID` / `BAIDU_APPKEY`。
 
-# ===== pgAdmin 登录（必填，仅部署机本机访问 127.0.0.1:5050）=====
-PGADMIN_EMAIL=admin@example.com
-PGADMIN_PASSWORD=ChangeMe_2026
-
-# ===== 网络搜图（可选）=====
-PIXABAY_API_KEY=
-PEXELS_API_KEY=
-BAIDU_APPID=
-BAIDU_APPKEY=
-```
+可选项留空即可。复制成 `.env` 后，记得把所有 `CHANGE_ME` 换成自己的值。
 
 然后：
 
@@ -439,6 +337,8 @@ notepad .env
 
 > 注意：
 > - `.env` 已在 `.gitignore` 里，不要提交，也不要打进镜像。
+> - 模板里的 `CHANGE_ME` 必须替换，直接沿用等于弱口令；`PGADMIN_EMAIL` 也要改成自己的邮箱。
+> - `.gitattributes` 已把 `.env.example` 固定为 LF，clone 后复制成 `.env` 不会带 `\r`；手动新建或用记事本另存时要注意编码。
 > - **数据库密码只使用字母、数字、下划线**。Python 的 `db.py` 是把密码直接拼进连接串的，密码里出现 `@`、`:`、`/`、`%`、`#`、空格会导致连接失败。
 > - `.env` 保存为 UTF-8（不要带 BOM）。如果出现「密码明明正确却认证失败」，检查值末尾是否混入了不可见字符（如 CRLF 换行残留、多余空格）。
 > - `.env` 必须和 `docker-compose.yml` 放在同一目录。所有 compose 命令都在项目根目录执行。
@@ -510,6 +410,8 @@ docker compose build
 - `npm ci` 安装前端依赖；
 - Maven 下载依赖；
 - pip 下载 torch 等依赖。
+
+这些下载只在**第一次**构建发生。两个 Dockerfile 都把依赖目录挂到了 BuildKit 缓存（npm 的 `/root/.npm`、Maven 的 `/root/.m2`、pip 的 `/root/.cache/pip`），之后重建会复用：只改前端时，`npm ci` 直接命中原层，Maven 依赖从缓存读取，`app` 镜像通常 1 分钟内就能重建完。前提是不要加 `--no-cache`，也不要在有缓存时执行 `docker builder prune`。
 
 `postgres:16` 和 `dpage/pgadmin4` 不在构建阶段拉取，而是在第一次 `docker compose up` 时获取。
 
@@ -648,6 +550,8 @@ docker compose logs --tail=200 app python
 > 注意：
 > - **不要执行 `docker compose down -v`**，`-v` 会把 `pgdata` / `pgadmin-data` 卷一起删掉，数据库直接丢。
 > - 依赖和 Dockerfile 没变时不要加 `--no-cache`，否则 torch 那层会重新下载；只有改了 `requirements.txt` 或 Dockerfile 才需要。
+> - 不要执行 `docker builder prune`：它会清掉 Maven / npm / pip 的缓存挂载，下一次构建又要全量下载。磁盘紧张时先 `docker image prune -f`。
+> - 如果之前按旧手册手抄过 Dockerfile，第一次换成仓库版本构建会重新下载一次（缓存挂载是空的，而且 python 镜像的 `ENV` 变了导致 pip 层失效），从第二次构建起才走缓存。
 > - 模型缓存在 `D:\artist-data\models`，重建容器不会重新下载。
 > - 表结构由 Hibernate `ddl-auto: update` 自动加表、加列；删列、改类型、重命名不会自动处理，这类改动要自己写 SQL。
 > - 回滚：把备份标签重新打回 `latest`（如 `docker tag artist-ref-app:backup-20261030 artist-ref-app:latest`），再 `docker compose up -d`。
@@ -864,7 +768,7 @@ sh: 1: /usr/bin/patch: not found
 Exception: Applying patch failed
 ```
 
-按 3.3 的 Dockerfile 安装 `build-essential` 和 `patch` 即可。不要尝试升级 lmdb：`cn_clip` 对其是 `lmdb==1.3.0` 精确锁定。
+仓库里的 `python-service/Dockerfile` 已经装了 `build-essential` 和 `patch`，正常构建不会遇到这个问题；如果改过 Dockerfile，确认 `apt-get install` 列表里仍有它们。不要尝试升级 lmdb：`cn_clip` 对其是 `lmdb==1.3.0` 精确锁定。
 
 ---
 
@@ -930,11 +834,11 @@ Exception: Applying patch failed
 
    这样首次启动不需要再下载。注意模型目录里应直接是 `clip_cn_vit-l-14.pt` 等文件/目录结构。
 
-如果只是慢、还能联网，可以在 Dockerfile 里临时换国内源：
+如果只是慢、还能联网，可以临时修改仓库里的 Dockerfile 换国内源（改动不要提交）：
 
 - npm：`RUN npm ci --registry=https://registry.npmmirror.com`
 - pip：`RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt`（`requirements.txt` 里 PyTorch 的 `--extra-index-url` 仍然有效）
-- Maven：在 `maven` 构建阶段挂载或用 `settings.xml` 配置阿里云镜像
+- Maven：在 `backend` 阶段把 `settings.xml` 复制进构建目录并用 `mvn -s` 指定；不要写进 `/root/.m2`，那是缓存挂载目录
 
 > 注意：`docker save` 导出的镜像包含 CPU 架构信息，开发机和部署机都跑 Linux 容器（Windows Docker Desktop 的默认模式）时没有问题。不要跨 ARM/x86 混用。
 
@@ -995,8 +899,8 @@ Exception: Applying patch failed
 - [ ] `D:\artist-data\{storage,index,models,import}` 已创建
 - [ ] 防火墙已放行 8080（只限专用网络）
 - [ ] 已确认无需修改代码（datasource URL 已参数化，`DB_HOST` / `DB_PORT` 由环境变量注入）
-- [ ] 已按 3.1–3.3、3.5 创建 `.dockerignore`、`Dockerfile`、`python-service/Dockerfile`、`.env.example`
-- [ ] 已从 `.env.example` 创建 `.env`，数据库密码只含字母数字下划线
+- [ ] 仓库已包含 `Dockerfile`、`python-service/Dockerfile`、`.dockerignore`、`.env.example`、`.gitattributes`，无需手动创建（拷文件部署时一并拷过去）
+- [ ] 已从 `.env.example` 创建 `.env`，替换所有 `CHANGE_ME`，数据库密码只含字母数字下划线
 - [ ] `docker compose build` 成功
 - [ ] `docker compose up -d` 后四个容器状态正常（python healthy）
 - [ ] 8080 页面可打开，局域网另一台机器也能访问

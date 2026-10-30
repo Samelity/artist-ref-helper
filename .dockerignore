@@ -1,0 +1,37 @@
+# 版本与 IDE
+.git
+.gitignore
+.idea
+.vscode
+**/*.iml
+
+# 构建产物
+target
+src/main/resources/static
+
+# 运行期数据（绝不能进镜像）
+logs
+docs
+vibe_images
+storage
+models
+index
+python-service/storage
+python-service/index
+python-service/models
+python-service/logs
+
+# Python
+**/__pycache__
+**/*.pyc
+**/.venv
+**/venv
+
+# 前端依赖
+frontend/node_modules
+
+# 密钥
+.env
+
+# 日志
+*.log

@@ -1,0 +1,8 @@
+# 容器构建相关文件必须保持 LF：Windows 检出为 CRLF 时，
+# Dockerfile 的 RUN 可能带上 \r，.env 的值也会混入不可见字符
+.gitattributes text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+.dockerignore text eol=lf
+.env.example text eol=lf
+*.sh text eol=lf

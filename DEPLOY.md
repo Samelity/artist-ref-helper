@@ -606,20 +606,52 @@ docker compose exec python tail -n 200 /app/logs/image_service.log
 
 > 文件日志在容器内，重建容器会丢失；需要长期保留可给 python 增加挂载 `D:/artist-data/logs:/app/logs`。
 
-### 7.2 更新版本
+### 7.2 更新版本（代码变更后重新部署）
+
+容器的代码是打进镜像里的，改了代码必须重建镜像再替换容器；图片、索引、模型在宿主目录，数据库在命名卷，重建都不会丢。
+
+先按改动范围决定重建谁：
+
+| 改动内容 | 操作 |
+|----------|------|
+| Java / 前端 | 重建 `app` |
+| Python（含 `requirements.txt`） | 重建 `python` |
+| 只改 `docker-compose.yml` / `.env` | **不用 build**，直接 `docker compose up -d` |
+| 只改 `DEPLOY.md` 等文档 | 不用操作 |
+| CLIP 模型、向量维度或相似度逻辑 | 重建镜像后再点一次「重建索引」 |
 
 ```powershell
 cd D:\artist-ref-helper
-docker compose stop app python
+
+# 1. 可选：给当前镜像留回滚标签
+docker tag artist-ref-app:latest    artist-ref-app:backup-20261030
+docker tag artist-ref-python:latest artist-ref-python:backup-20261030
+
+# 2. 更新源码：clone 的仓库用 git pull；
+#    拷文件部署的用 robocopy 同步源码，排除 .env、storage、index、models、logs、target
 git pull
-docker compose build app python
+
+# 3. 按范围重建（不确定就 docker compose build 全量）
+docker compose build app
+docker compose build python
+
+# 4. 应用新镜像，只会重建镜像变了的容器
 docker compose up -d
+
+# 5. 验证
+docker compose ps
+docker compose logs --tail=200 app python
 ```
 
-- 只改后端/前端：重建 `app`。
-- 只改 Python：重建 `python`。
-- 数据库卷和宿主数据目录不受影响。
-- 更新前建议先做一次备份（见 7.3）。
+`up -d` 重建容器时服务会中断几秒，局域网个人使用不用追求零停机。
+
+> 注意：
+> - **不要执行 `docker compose down -v`**，`-v` 会把 `pgdata` / `pgadmin-data` 卷一起删掉，数据库直接丢。
+> - 依赖和 Dockerfile 没变时不要加 `--no-cache`，否则 torch 那层会重新下载；只有改了 `requirements.txt` 或 Dockerfile 才需要。
+> - 模型缓存在 `D:\artist-data\models`，重建容器不会重新下载。
+> - 表结构由 Hibernate `ddl-auto: update` 自动加表、加列；删列、改类型、重命名不会自动处理，这类改动要自己写 SQL。
+> - 回滚：把备份标签重新打回 `latest`（如 `docker tag artist-ref-app:backup-20261030 artist-ref-app:latest`），再 `docker compose up -d`。
+> - 更新前建议先做一次备份（见 7.3）。
 
 ### 7.3 备份
 

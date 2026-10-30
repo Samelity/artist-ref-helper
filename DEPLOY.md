@@ -20,6 +20,7 @@
 | PostgreSQL | `artist-ref-postgres` | `postgres:16` | 5432 | **不发布** | 命名卷 `pgdata` |
 | Python 检索服务 | `artist-ref-python` | 自建 `artist-ref-python:latest` | 8000 | **不发布** | `D:\artist-data\{storage,index,models}` |
 | Spring Boot + 前端 | `artist-ref-app` | 自建 `artist-ref-app:latest` | 8080 | `8080` | 无（图片在 Python 侧目录） |
+| pgAdmin（维护用） | `artist-ref-pgadmin` | `dpage/pgadmin4` | 80 | `127.0.0.1:5050` | 命名卷 `pgadmin-data` |
 
 请求链路：
 
@@ -33,7 +34,8 @@
 
 - 浏览器只接触 `8080`，`/py/**` 由 Spring Boot 反向代理，因此不需要给 Python 开端口，也不需要配置 CORS。
 - Python 和 PostgreSQL 都不要发布端口（调试时可临时绑定 `127.0.0.1`）。
-- 图片、索引、模型全部放在宿主目录，重建容器不会丢；PostgreSQL 数据放在命名卷。
+- pgAdmin 只绑定宿主机回环 `127.0.0.1:5050`，只有部署机本机能打开；它通过 compose 网络用服务名 `postgres` 连数据库，所以同样不需要发布 5432。
+- 图片、索引、模型全部放在宿主目录，重建容器不会丢；PostgreSQL 和 pgAdmin 的数据放在命名卷。
 
 ---
 
@@ -250,17 +252,26 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=Asia/Shanghai
 
+# libgomp1 / libgl1 / libglib2.0-0：torch、faiss、Pillow 的运行库
+# build-essential + patch：cn_clip 固定依赖 lmdb==1.3.0，该版本没有 cp311 的 Linux wheel，
+# 必须从源码编译，py-lmdb 的打包脚本需要 patch 和 C 编译器
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         libgomp1 \
         libgl1 \
         libglib2.0-0 \
         tzdata \
+        build-essential \
+        patch \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY python-service/requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+# 装完立即卸载编译工具，避免最终镜像多出几百 MB（同一 RUN 内删除不计入镜像层）
+RUN pip install --upgrade pip && pip install -r requirements.txt \
+    && apt-get purge -y --auto-remove build-essential patch \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY python-service/ ./
 
 EXPOSE 8000
@@ -273,6 +284,7 @@ CMD ["uvicorn", "search_service:app", "--host", "0.0.0.0", "--port", "8000", "--
 
 - 基础镜像用 Python 3.11，与 `requirements.txt` 的注释一致。
 - `libgomp1` 是 torch/faiss 需要的 OpenMP 运行库；`libgl1`/`libglib2.0-0` 给 Pillow/torchvision 用。
+- `build-essential` 和 `patch` 只在 `pip install` 阶段需要（编译 lmdb），装完就 `purge`，不会被带进最终镜像；不装会报 `sh: 1: /usr/bin/patch: not found`。
 - 不使用 `python search_service.py` 启动，因为代码里绑定的是 `127.0.0.1`；命令行参数覆盖为 `0.0.0.0`。
 - `COPY python-service/ ./` 只决定代码位置（`/app`）。图片、索引、模型目录全部由 compose 的 `STORAGE_DIR` / `INDEX_DIR` / `MODEL_DIR` 指定为 `/data/**`，与代码目录、工作目录都解耦。
 
@@ -361,18 +373,38 @@ services:
       postgres:
         condition: service_healthy
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: artist-ref-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: "False"
+      TZ: Asia/Shanghai
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    ports:
+      # 只绑定部署机回环地址，局域网其他设备访问不到
+      - "127.0.0.1:5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
+  pgadmin-data:
 ```
 
 几个关键点：
 
-- 三个服务在同一个默认网络里，用服务名 `postgres`、`python` 互相访问。
+- 四个服务在同一个默认网络里，用服务名 `postgres`、`python` 互相访问。
 - Python 的数据路径统一由环境变量指定：`STORAGE_DIR=/data/storage`、`MODEL_DIR=/data/models`、`INDEX_DIR=/data/index`，与代码目录 `/app` 解耦。
-- 只有 `app` 发布端口；Python 和 PostgreSQL 不发布，局域网访问不到 8000/5432。
+- 只有 `app` 对局域网发布端口；Python、PostgreSQL 不发布，局域网访问不到 8000/5432；pgAdmin 只绑定 `127.0.0.1:5050`，仅部署机本机可访问。
 - Python 的 `start_period` 给了 300 秒，是因为首次启动要下载/加载模型；期间状态是 `starting`，不是故障。
-- `pgdata` 是命名卷，`docker compose down` 不会删；只有 `down -v` 会删。
-- 调试时如需连数据库，可临时给 postgres 加 `ports: ["127.0.0.1:5432:5432"]`，用完删掉。
+- `pgdata` 和 `pgadmin-data` 是命名卷，`docker compose down` 不会删；只有 `down -v` 会删。
+- 平时不需要 pgAdmin 时执行 `docker compose stop pgadmin`，可省下几百 MB 内存；下次 `docker compose up -d` 会重新启动它。
+- 调试时如需用本机其他数据库工具直连，可临时给 postgres 加 `ports: ["127.0.0.1:5432:5432"]`，用完删掉。
 
 ### 3.5 `.env`
 
@@ -386,6 +418,10 @@ volumes:
 DB_NAME=artist_ref
 DB_USER=artist
 DB_PASSWORD=ArtistRef_2026_ChangeMe
+
+# ===== pgAdmin 登录（必填，仅部署机本机访问 127.0.0.1:5050）=====
+PGADMIN_EMAIL=admin@example.com
+PGADMIN_PASSWORD=ChangeMe_2026
 
 # ===== 网络搜图（可选）=====
 PIXABAY_API_KEY=
@@ -406,6 +442,7 @@ notepad .env
 > - **数据库密码只使用字母、数字、下划线**。Python 的 `db.py` 是把密码直接拼进连接串的，密码里出现 `@`、`:`、`/`、`%`、`#`、空格会导致连接失败。
 > - `.env` 保存为 UTF-8（不要带 BOM）。如果出现「密码明明正确却认证失败」，检查值末尾是否混入了不可见字符（如 CRLF 换行残留、多余空格）。
 > - `.env` 必须和 `docker-compose.yml` 放在同一目录。所有 compose 命令都在项目根目录执行。
+> - `PGADMIN_EMAIL` / `PGADMIN_PASSWORD` 是 pgAdmin 的登录账号，和数据库账号无关。它们只在 `pgadmin-data` 卷为空时生效；后续改 `.env` 不会改已有账号，需要在 pgAdmin 页面里改密码，或删掉该卷重来（只丢 pgAdmin 的服务器配置，不影响数据库）。
 
 ---
 
@@ -474,7 +511,7 @@ docker compose build
 - Maven 下载依赖；
 - pip 下载 torch 等依赖。
 
-`postgres:16` 不在构建阶段拉取，而是在第一次 `docker compose up` 时获取。
+`postgres:16` 和 `dpage/pgadmin4` 不在构建阶段拉取，而是在第一次 `docker compose up` 时获取。
 
 构建完成后可以用 `docker images` 看到 `artist-ref-app` 和 `artist-ref-python`。
 
@@ -488,9 +525,9 @@ docker compose ps
 启动顺序：
 
 1. `postgres` 先启动并通过 `pg_isready` 健康检查；
-2. `app` 与 `python` 随后并行启动：`app` 由 Hibernate 自动建表，`python` 加载/下载 Chinese-CLIP 模型并读取 FAISS 索引（启动阶段不访问数据库）。
+2. `app`、`python`、`pgadmin` 随后并行启动：`app` 由 Hibernate 自动建表，`python` 加载/下载 Chinese-CLIP 模型并读取 FAISS 索引（启动阶段不访问数据库），`pgadmin` 初始化自己的配置。三者互不阻塞。
 
-因此正常情况下先打开页面、再等 python 变成 `healthy` 即可；两者互不阻塞。
+因此正常情况下先打开页面、再等 python 变成 `healthy` 即可；`app`、`python`、`pgadmin` 三者互不阻塞。
 
 查看日志：
 
@@ -654,6 +691,32 @@ docker image prune -f
 docker stats
 ```
 
+### 7.6 用 pgAdmin 维护数据库
+
+pgAdmin 已在 compose 里，不需要给 PostgreSQL 发布 5432 端口。在**部署机**上打开 `http://127.0.0.1:5050`（局域网其他设备打不开，这是故意的），用 `.env` 里的 `PGADMIN_EMAIL` / `PGADMIN_PASSWORD` 登录。
+
+首次使用需要注册一次服务器，之后配置会保存在 `pgadmin-data` 卷里：
+
+| 字段 | 值 |
+|------|-----|
+| Name | `artist-ref`（随意） |
+| Host name/address | `postgres`（compose 服务名，不要填 localhost） |
+| Port | `5432` |
+| Maintenance database | `postgres` |
+| Username | `.env` 里的 `DB_USER`（手册示例是 `artist`） |
+| Password | `.env` 里的 `DB_PASSWORD` |
+
+常见操作：
+
+- 表数据浏览 / 修改：`artist_ref` → Schemas → public → Tables → `reference_image`；
+- 执行 SQL：右键 `artist_ref` → Query Tool；
+- 备份：右键 `artist_ref` → Backup，格式选 Custom，等价于 7.3 的 `pg_dump`。
+
+> 注意：
+> - 不需要时执行 `docker compose stop pgadmin` 释放内存，下次 `docker compose up -d` 会重新启动。
+> - 登录失败时先确认 `.env` 里的两个 pgAdmin 变量非空，并 `docker compose up -d pgadmin` 让容器按新环境变量重建；如果之前已经初始化过卷，旧密码优先，见 3.5 的说明。
+> - pgAdmin 只是数据库客户端，删掉 `pgadmin-data` 卷只丢保存的服务器配置，不影响 `artist_ref` 数据。
+
 ---
 
 ## 8. 常见问题
@@ -760,6 +823,17 @@ Docker Desktop 默认要登录 Windows 后才启动。打开 Docker Desktop 设�
 - 没有配置 `PIXABAY_API_KEY` 时网络搜图不可用，本地图库检索不受影响；
 - Pexels 是备用源，Key 失效不影响 Pixabay 和本地功能。
 
+### 8.16 Python 构建失败：`/usr/bin/patch: not found`
+
+`cn_clip` 固定依赖 `lmdb==1.3.0`，该版本在 PyPI 上没有适用于 Python 3.11 的 Linux wheel，`pip` 只能下载源码包现场编译。`python:3.11-slim` 不含编译工具，于是报：
+
+```
+sh: 1: /usr/bin/patch: not found
+Exception: Applying patch failed
+```
+
+按 3.3 的 Dockerfile 安装 `build-essential` 和 `patch` 即可。不要尝试升级 lmdb：`cn_clip` 对其是 `lmdb==1.3.0` 精确锁定。
+
 ---
 
 ## 附录 A：环境变量总表
@@ -776,6 +850,7 @@ Docker Desktop 默认要登录 Windows 后才启动。打开 Docker Desktop 设�
 | `INDEX_DIR` | Python | `<python-service>/index` | compose 传 `/data/index` | FAISS 索引和 id 映射目录；`INDEX_PATH`/`IDS_PATH` 由它派生 |
 | `IMPORT_DIR` | Python | 无 | 否 | 共享目录导入的来源目录 |
 | `CLIP_SERVICE_BASE_URL` | Java | `http://127.0.0.1:8000` | compose 传 `http://python:8000` | Python 服务地址 |
+| `PGADMIN_EMAIL` / `PGADMIN_PASSWORD` | pgAdmin | 无 | 是 | pgAdmin 登录账号，仅首次初始化 `pgadmin-data` 卷时生效 |
 | `PIXABAY_API_KEY` | Python | 空 | 否 | Pixabay 网络搜图 |
 | `PEXELS_API_KEY` | Python | 空 | 否 | Pexels 备用源（Key 失效不影响本地检索） |
 | `BAIDU_APPID` / `BAIDU_APPKEY` | Python | 空 | 否 | 中文查询转英文 |
@@ -887,12 +962,13 @@ Docker Desktop 默认要登录 Windows 后才启动。打开 Docker Desktop 设�
 - [ ] WSL2 内存已按机器配置调整（建议 ≥ 8 GB 给 Docker）
 - [ ] `D:\artist-data\{storage,index,models,import}` 已创建
 - [ ] 防火墙已放行 8080（只限专用网络）
-- [ ] `application.yml` 的 datasource URL 已改为 `${DB_HOST:localhost}:${DB_PORT:5432}`
-- [ ] 已创建 `.dockerignore`、`Dockerfile`、`python-service/Dockerfile`、`docker-compose.yml`
-- [ ] 已从 `.env.example` 创建 `.env`，密码只含字母数字下划线
+- [ ] 已确认无需修改代码（datasource URL 已参数化，`DB_HOST` / `DB_PORT` 由环境变量注入）
+- [ ] 已按 3.1–3.3、3.5 创建 `.dockerignore`、`Dockerfile`、`python-service/Dockerfile`、`.env.example`
+- [ ] 已从 `.env.example` 创建 `.env`，数据库密码只含字母数字下划线
 - [ ] `docker compose build` 成功
-- [ ] `docker compose up -d` 后三个容器状态正常（python healthy）
+- [ ] `docker compose up -d` 后四个容器状态正常（python healthy）
 - [ ] 8080 页面可打开，局域网另一台机器也能访问
+- [ ] 部署机上 `http://127.0.0.1:5050` 能登录 pgAdmin 并看到 `artist_ref`（可选）
 - [ ] 已上传/导入至少一张图片并完成索引
 - [ ] 图库浏览、搜索、图片查看均正常
 - [ ] 已做一次数据库 + storage + index 备份

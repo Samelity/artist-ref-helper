@@ -116,6 +116,30 @@ const icons: Record<string, Shape[]> = {
     { t: 'p', d: 'M20 9.5V4h-5.5' },
     { t: 'p', d: 'M4 14.5V20h5.5' },
   ],
+  grid: [
+    { t: 'r', x: 3.5, y: 3.5, w: 17, h: 17, rx: 2.5 },
+    { t: 'p', d: 'M12 3.5v17' },
+    { t: 'p', d: 'M3.5 12h17' },
+  ],
+  'rotate-left': [
+    { t: 'p', d: 'M3 2.5v6h6' },
+    { t: 'p', d: 'M3.5 15a9 9 0 1 0 2.1-9.4L3 8' },
+  ],
+  'rotate-right': [
+    { t: 'p', d: 'M21 2.5v6h-6' },
+    { t: 'p', d: 'M20.5 15a9 9 0 1 1-2.1-9.4L21 8' },
+  ],
+  'zoom-in': [
+    { t: 'c', cx: 11, cy: 11, r: 7 },
+    { t: 'p', d: 'm16.2 16.2 4.3 4.3' },
+    { t: 'p', d: 'M11 8v6' },
+    { t: 'p', d: 'M8 11h6' },
+  ],
+  'zoom-out': [
+    { t: 'c', cx: 11, cy: 11, r: 7 },
+    { t: 'p', d: 'm16.2 16.2 4.3 4.3' },
+    { t: 'p', d: 'M8 11h6' },
+  ],
 }
 
 const shapes = computed<Shape[]>(() => icons[props.name] ?? [])

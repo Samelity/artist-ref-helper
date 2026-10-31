@@ -12,3 +12,14 @@ export interface BoardCreate {
   name: string
   description?: string
 }
+
+export interface BoardUpdate {
+  name: string
+  description: string
+}
+
+export interface BatchAddResult {
+  board: Board
+  added: number
+  skipped: number
+}

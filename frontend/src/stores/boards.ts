@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as boardsApi from '@/api/boards'
-import type { Board, BoardCreate } from '@/types/board'
+import type { BatchAddResult, Board, BoardCreate, BoardUpdate } from '@/types/board'
 
 export const useBoardsStore = defineStore('boards', () => {
   const boards = ref<Board[]>([])
@@ -27,16 +27,24 @@ export const useBoardsStore = defineStore('boards', () => {
     return b
   }
 
+  async function update(id: number, data: BoardUpdate) {
+    const b = await boardsApi.updateBoard(id, data)
+    const idx = boards.value.findIndex((x) => x.id === b.id)
+    if (idx >= 0) boards.value[idx] = b
+    return b
+  }
+
   async function remove(id: number) {
     await boardsApi.deleteBoard(id)
     boards.value = boards.value.filter((b) => b.id !== id)
     if (currentBoardId.value === id) currentBoardId.value = null
   }
 
-  async function addImage(boardId: number, imageId: number) {
-    await boardsApi.addImageToBoard(boardId, imageId)
-    if (currentBoardId.value === boardId) await refreshCurrent()
-    await load()
+  async function addImages(boardId: number, imageIds: number[]): Promise<BatchAddResult> {
+    const result = await boardsApi.addImagesToBoard(boardId, imageIds)
+    const idx = boards.value.findIndex((b) => b.id === result.board.id)
+    if (idx >= 0) boards.value[idx] = result.board
+    return result
   }
 
   async function removeImage(boardId: number, imageId: number) {
@@ -56,8 +64,9 @@ export const useBoardsStore = defineStore('boards', () => {
     load,
     refreshCurrent,
     create,
+    update,
     remove,
-    addImage,
+    addImages,
     removeImage,
     select,
   }

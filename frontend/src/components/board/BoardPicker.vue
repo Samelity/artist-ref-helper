@@ -1,7 +1,13 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" ref="pickerRef" class="board-picker" :style="posStyle">
-      <p class="picker-title">添加到灵感板</p>
+      <p class="picker-title">
+        <span>
+          添加到灵感板
+          <span v-if="imageIds.length > 1" class="picker-count">· {{ imageIds.length }} 张</span>
+        </span>
+        <span v-if="submitting" class="picker-submitting">添加中…</span>
+      </p>
       <div v-if="loading" class="picker-row muted">加载中…</div>
       <div v-else-if="!store.boards.length" class="picker-row muted">
         暂无灵感板，先创建再添加
@@ -12,6 +18,7 @@
           :key="board.id"
           type="button"
           class="picker-row picker-item"
+          :disabled="submitting"
           @click="add(board.id)"
         >
           <span class="item-name">{{ board.name }}</span>
@@ -32,15 +39,16 @@ import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { useBoardsStore } from '@/stores/boards'
+import type { BatchAddResult } from '@/types/board'
 
 const props = defineProps<{
-  imageId: number
+  imageIds: number[]
   anchor: { left: number; top: number }
 }>()
 
 const emit = defineEmits<{
   close: []
-  added: []
+  added: [result: BatchAddResult]
 }>()
 
 const router = useRouter()
@@ -49,6 +57,7 @@ const message = useMessage()
 
 const visible = ref(true)
 const loading = ref(false)
+const submitting = ref(false)
 const pickerRef = ref<HTMLElement | null>(null)
 const pos = ref({ left: props.anchor.left, top: props.anchor.top })
 
@@ -85,19 +94,24 @@ onBeforeUnmount(() => {
 })
 
 function onClickOutside(e: MouseEvent) {
+  if (submitting.value) return
   if (pickerRef.value && !pickerRef.value.contains(e.target as Node)) {
     emit('close')
   }
 }
 
 async function add(boardId: number) {
+  if (submitting.value) return
+  submitting.value = true
   try {
-    await store.addImage(boardId, props.imageId)
-    emit('added')
+    const result = await store.addImages(boardId, props.imageIds)
+    emit('added', result)
     emit('close')
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     message.error('添加失败：' + msg)
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -132,11 +146,25 @@ function goToBoards() {
 }
 
 .picker-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   padding: 6px 10px 8px;
   font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text-4);
+}
+
+.picker-count {
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.picker-submitting {
+  font-weight: 500;
+  color: var(--brand);
 }
 
 .picker-row {
@@ -168,6 +196,16 @@ function goToBoards() {
 .picker-item:hover {
   background: var(--brand-soft);
   color: var(--brand-pressed);
+}
+
+.picker-item:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.picker-item:disabled:hover {
+  background: transparent;
+  color: var(--text-2);
 }
 
 .item-name {

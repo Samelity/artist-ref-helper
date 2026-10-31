@@ -1,15 +1,20 @@
 package com.example.artist.service;
 
+import com.example.artist.dto.BoardBatchAddResponse;
 import com.example.artist.dto.BoardResponse;
 import com.example.artist.model.BoardEntity;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.repository.BoardRepository;
 import com.example.artist.repository.ImageRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 灵感板服务：创建分组、收藏图片。
@@ -20,12 +25,15 @@ public class InspirationBoardService {
 
     private final BoardRepository boardRepository;
     private final ImageRepository imageRepository;
+    private final int maxBatchImages;
 
     public InspirationBoardService(
             BoardRepository boardRepository,
-            ImageRepository imageRepository) {
+            ImageRepository imageRepository,
+            @Value("${board.batch.max-images}") int maxBatchImages) {
         this.boardRepository = boardRepository;
         this.imageRepository = imageRepository;
+        this.maxBatchImages = maxBatchImages;
     }
 
     @Transactional
@@ -70,22 +78,52 @@ public class InspirationBoardService {
 
     @Transactional
     public BoardResponse addImageToBoard(Long boardId, Long imageId) {
-        BoardEntity board = boardRepository.findByIdWithImages(boardId)
-                .orElseThrow(() -> new IllegalArgumentException("Board not found: " + boardId));
-        ImageEntity image = imageRepository.findById(imageId)
-                .orElseThrow(() -> new IllegalArgumentException("Image not found: " + imageId));
+        return addImagesToBoard(boardId, List.of(imageId)).board();
+    }
 
-        boolean alreadyPresent = board.getImages().stream()
-                .anyMatch(img -> img.getId().equals(imageId));
-        if (alreadyPresent) {
-            log.info("Image {} already in board {}, skipping", imageId, boardId);
-            return toResponse(board);
+    @Transactional
+    public BoardBatchAddResponse addImagesToBoard(Long boardId, List<Long> imageIds) {
+        if (imageIds == null || imageIds.isEmpty()) {
+            throw new IllegalArgumentException("请至少选择一张图片");
         }
 
-        board.getImages().add(image);
-        boardRepository.save(board);
-        log.info("Added image {} to board {}", imageId, boardId);
-        return toResponse(board);
+        Set<Long> uniqueIds = new LinkedHashSet<>();
+        for (Long imageId : imageIds) {
+            if (imageId != null) {
+                uniqueIds.add(imageId);
+            }
+        }
+        if (uniqueIds.isEmpty()) {
+            throw new IllegalArgumentException("请至少选择一张图片");
+        }
+        if (uniqueIds.size() > maxBatchImages) {
+            throw new IllegalArgumentException("单次最多添加 " + maxBatchImages + " 张图片");
+        }
+
+        BoardEntity board = boardRepository.findByIdWithImages(boardId)
+                .orElseThrow(() -> new IllegalArgumentException("Board not found: " + boardId));
+
+        Set<Long> existingIds = new HashSet<>();
+        for (ImageEntity image : board.getImages()) {
+            existingIds.add(image.getId());
+        }
+
+        int added = 0;
+        List<ImageEntity> images = imageRepository.findAllById(uniqueIds);
+        for (ImageEntity image : images) {
+            if (existingIds.add(image.getId())) {
+                board.getImages().add(image);
+                added++;
+            }
+        }
+        if (added > 0) {
+            boardRepository.save(board);
+        }
+
+        int skipped = uniqueIds.size() - added;
+        log.info("Batch add to board {}: requested={}, added={}, skipped={}",
+                boardId, uniqueIds.size(), added, skipped);
+        return new BoardBatchAddResponse(toResponse(board), added, skipped);
     }
 
     @Transactional

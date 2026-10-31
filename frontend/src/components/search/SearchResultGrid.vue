@@ -4,11 +4,14 @@
       v-for="(item, i) in items"
       :key="item.id"
       :item="item"
+      :selection-mode="selectionMode"
+      :selected="selectedIds.has(item.id)"
       @preview="openPreview(i)"
       @add-to-board="(id, ev) => $emit('addToBoard', { imageId: id, event: ev })"
+      @toggle-select="$emit('toggleSelect', item.id)"
     />
   </div>
-  <EmptyState v-else :text="emptyText || '暂无结果'" />
+  <EmptyState v-else :text="emptyText" />
 </template>
 
 <script setup lang="ts">
@@ -19,13 +22,23 @@ import { useLightboxStore } from '@/stores/lightbox'
 import { imageUrl } from '@/utils/imageUrl'
 import { formatScore } from '@/utils/format'
 
-const props = defineProps<{
-  items: ImageItem[]
-  emptyText?: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    items: ImageItem[]
+    emptyText?: string
+    selectionMode?: boolean
+    selectedIds?: Set<number>
+  }>(),
+  {
+    emptyText: '暂无结果',
+    selectionMode: false,
+    selectedIds: () => new Set<number>(),
+  },
+)
 
 defineEmits<{
   addToBoard: [payload: { imageId: number, event: MouseEvent }]
+  toggleSelect: [imageId: number]
 }>()
 
 const lightbox = useLightboxStore()

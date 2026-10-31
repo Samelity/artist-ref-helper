@@ -71,6 +71,7 @@ defineEmits<{ remove: []; preview: [] }>()
   height: 24px;
   display: grid;
   place-items: center;
+  padding: 0;
   border: none;
   border-radius: 50%;
   color: #fff;

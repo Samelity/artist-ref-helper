@@ -1,9 +1,33 @@
 <template>
-  <article class="image-card">
-    <div class="media" title="点击预览" @click="$emit('preview')">
+  <article class="image-card" :class="{ 'is-selected': selectionMode && selected }">
+    <div
+      class="media"
+      :class="{ 'is-selectable': selectionMode }"
+      :role="selectionMode ? 'checkbox' : undefined"
+      :aria-checked="selectionMode ? selected : undefined"
+      :tabindex="selectionMode ? 0 : undefined"
+      :title="mediaTitle"
+      @click="onMediaClick"
+      @keydown.enter.prevent="onToggleKey"
+      @keydown.space.prevent="onToggleKey"
+    >
       <img :src="imageUrl(item.filePath)" :alt="item.fileName || ''" loading="lazy" />
       <span v-if="typeof item.score === 'number'" class="score">{{ formatScore(item.score) }}</span>
       <button
+        v-if="selectionMode"
+        class="expand"
+        type="button"
+        title="预览大图"
+        aria-label="预览大图"
+        @click.stop="$emit('preview')"
+      >
+        <AppIcon name="expand" :size="13" />
+      </button>
+      <span v-if="selectionMode" class="check" :class="{ on: selected }" aria-hidden="true">
+        <AppIcon v-if="selected" name="check" :size="14" :stroke-width="2.4" />
+      </span>
+      <button
+        v-else
         class="add"
         type="button"
         title="添加到灵感板"
@@ -21,16 +45,43 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { ImageItem } from '@/types/image'
 import { imageUrl } from '@/utils/imageUrl'
 import { formatScore } from '@/utils/format'
 import AppIcon from '@/components/common/AppIcon.vue'
 
-defineProps<{ item: ImageItem }>()
-defineEmits<{
+const props = withDefaults(
+  defineProps<{
+    item: ImageItem
+    selectionMode?: boolean
+    selected?: boolean
+  }>(),
+  { selectionMode: false, selected: false },
+)
+
+const emit = defineEmits<{
   addToBoard: [imageId: number, event: MouseEvent]
   preview: []
+  toggleSelect: []
 }>()
+
+const mediaTitle = computed(() => {
+  if (!props.selectionMode) return '点击预览'
+  return props.selected ? '取消选中' : '选中图片'
+})
+
+function onMediaClick() {
+  if (props.selectionMode) {
+    emit('toggleSelect')
+  } else {
+    emit('preview')
+  }
+}
+
+function onToggleKey() {
+  if (props.selectionMode) emit('toggleSelect')
+}
 </script>
 
 <style scoped>
@@ -51,12 +102,26 @@ defineEmits<{
   box-shadow: var(--shadow-md);
 }
 
+.image-card.is-selected {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-ring), var(--shadow-sm);
+}
+
 .media {
   position: relative;
   aspect-ratio: 4 / 3;
   background: var(--bg-hover);
   overflow: hidden;
   cursor: zoom-in;
+}
+
+.media.is-selectable {
+  cursor: pointer;
+}
+
+.media:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
 }
 
 .media img {
@@ -83,6 +148,53 @@ defineEmits<{
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+}
+
+.media.is-selectable .score {
+  left: 38px;
+}
+
+.expand {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(17, 24, 39, 0.55);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+
+.expand:hover {
+  background: var(--brand);
+}
+
+.check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: blur(4px);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.check.on {
+  background: var(--brand);
+  border-color: var(--brand);
 }
 
 .add {

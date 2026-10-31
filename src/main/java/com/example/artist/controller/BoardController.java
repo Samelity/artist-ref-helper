@@ -1,5 +1,7 @@
 package com.example.artist.controller;
 
+import com.example.artist.dto.BoardBatchAddRequest;
+import com.example.artist.dto.BoardBatchAddResponse;
 import com.example.artist.dto.BoardResponse;
 import com.example.artist.model.BoardEntity;
 import com.example.artist.service.InspirationBoardService;
@@ -52,6 +54,13 @@ public class BoardController {
     public ResponseEntity<BoardResponse> addImage(@PathVariable Long boardId,
                                                    @PathVariable Long imageId) {
         return ResponseEntity.ok(boardService.addImageToBoard(boardId, imageId));
+    }
+
+    @PostMapping("/{boardId}/images/batch")
+    public ResponseEntity<BoardBatchAddResponse> addImages(
+            @PathVariable Long boardId,
+            @RequestBody BoardBatchAddRequest request) {
+        return ResponseEntity.ok(boardService.addImagesToBoard(boardId, request.imageIds()));
     }
 
     @DeleteMapping("/{boardId}/images/{imageId}")

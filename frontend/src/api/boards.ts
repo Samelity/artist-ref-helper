@@ -1,5 +1,5 @@
 import { javaHttp } from './http'
-import type { Board, BoardCreate } from '@/types/board'
+import type { BatchAddResult, Board, BoardCreate, BoardUpdate } from '@/types/board'
 
 export async function listBoards(): Promise<Board[]> {
   const resp = await javaHttp.get<Board[]>('/api/boards')
@@ -16,12 +16,22 @@ export async function createBoard(data: BoardCreate): Promise<Board> {
   return resp.data
 }
 
+export async function updateBoard(id: number, data: BoardUpdate): Promise<Board> {
+  const resp = await javaHttp.put<Board>(`/api/boards/${id}`, data)
+  return resp.data
+}
+
 export async function deleteBoard(id: number): Promise<void> {
   await javaHttp.delete(`/api/boards/${id}`)
 }
 
-export async function addImageToBoard(boardId: number, imageId: number): Promise<Board> {
-  const resp = await javaHttp.post<Board>(`/api/boards/${boardId}/images/${imageId}`)
+export async function addImagesToBoard(
+  boardId: number,
+  imageIds: number[],
+): Promise<BatchAddResult> {
+  const resp = await javaHttp.post<BatchAddResult>(`/api/boards/${boardId}/images/batch`, {
+    imageIds,
+  })
   return resp.data
 }
 

@@ -47,6 +47,11 @@ clip:
     # 批量上传 + CLIP 编码耗时较长，放宽到 300s
     proxy-timeout-seconds: 300
 
+# 灵感板
+board:
+  batch:
+    max-images: 500                # 单次批量加入灵感板的图片上限
+
 # 本地图库
 image:
   browse:

@@ -103,32 +103,6 @@ def exists_by_hash(content_hash: str) -> int | None:
     return row["id"] if row else None
 
 
-def list_images_missing_hash():
-    """返回还没有 content_hash 的记录，供回填脚本使用。"""
-    sql = "SELECT id, file_path FROM reference_image WHERE content_hash IS NULL ORDER BY id"
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute(sql)
-        return cur.fetchall()
-
-
-def update_content_hashes(pairs):
-    """批量回填 content_hash。pairs = [(hash, db_id), ...]"""
-    sql = "UPDATE reference_image SET content_hash = %s WHERE id = %s"
-    with connect() as conn, conn.cursor() as cur:
-        cur.executemany(sql, pairs)
-
-
-def list_duplicate_hashes():
-    """返回内容完全相同的哈希组，仅用于回填后的人工核对。"""
-    sql = (
-        "SELECT content_hash, COUNT(*) AS cnt FROM reference_image "
-        "WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1"
-    )
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute(sql)
-        return cur.fetchall()
-
-
 def exists_by_source_id(source_id: str) -> bool:
     """检查 source_id 是否已存在（用于 Pexels 去重）。"""
     sql = "SELECT 1 FROM reference_image WHERE source_id = %s LIMIT 1"

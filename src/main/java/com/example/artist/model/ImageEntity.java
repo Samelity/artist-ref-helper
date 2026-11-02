@@ -49,4 +49,8 @@ public class ImageEntity {
     /** CLIP 相关度：非数据库列，仅本次检索响应使用。 */
     @Transient
     private Double score;
+
+    /** 文件内容 SHA-256，用于上传/导入去重；存量数据由 backfill_content_hash.py 补齐。 */
+    @Column(name = "content_hash", length = 64)
+    private String contentHash;
 }

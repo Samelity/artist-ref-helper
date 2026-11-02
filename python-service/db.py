@@ -24,14 +24,14 @@ def query_one(sql, params=None):
         return cur.fetchone()
 
 
-def insert_image(file_name: str, file_path: str) -> int:
+def insert_image(file_name: str, file_path: str, content_hash: str | None = None) -> int:
     """插入一条图片元数据，返回自增主键 id。file_path 为相对 STORAGE_DIR 的路径。"""
     sql = (
-        "INSERT INTO reference_image (file_name, file_path) "
-        "VALUES (%s, %s) RETURNING id"
+        "INSERT INTO reference_image (file_name, file_path, content_hash) "
+        "VALUES (%s, %s, %s) RETURNING id"
     )
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (file_name, file_path))
+        cur.execute(sql, (file_name, file_path, content_hash))
         return cur.fetchone()["id"]
 
 
@@ -78,15 +78,55 @@ def insert_image_with_source(
     source_id: str | None = None,
     source_url: str | None = None,
     photographer: str | None = None,
+    content_hash: str | None = None,
 ) -> int:
     """插入一条带来源信息的图片记录，返回自增主键 id。file_path 为相对 STORAGE_DIR 的路径。"""
     sql = (
-        "INSERT INTO reference_image (file_name, file_path, source, source_id, source_url, photographer) "
-        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id"
+        "INSERT INTO reference_image "
+        "(file_name, file_path, source, source_id, source_url, photographer, content_hash) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id"
     )
     with connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (file_name, file_path, source, source_id, source_url, photographer))
+        cur.execute(
+            sql,
+            (file_name, file_path, source, source_id, source_url, photographer, content_hash),
+        )
         return cur.fetchone()["id"]
+
+
+def exists_by_hash(content_hash: str) -> int | None:
+    """按内容哈希查找图片 id，用于上传/导入去重。"""
+    row = query_one(
+        "SELECT id FROM reference_image WHERE content_hash = %s LIMIT 1",
+        (content_hash,),
+    )
+    return row["id"] if row else None
+
+
+def list_images_missing_hash():
+    """返回还没有 content_hash 的记录，供回填脚本使用。"""
+    sql = "SELECT id, file_path FROM reference_image WHERE content_hash IS NULL ORDER BY id"
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        return cur.fetchall()
+
+
+def update_content_hashes(pairs):
+    """批量回填 content_hash。pairs = [(hash, db_id), ...]"""
+    sql = "UPDATE reference_image SET content_hash = %s WHERE id = %s"
+    with connect() as conn, conn.cursor() as cur:
+        cur.executemany(sql, pairs)
+
+
+def list_duplicate_hashes():
+    """返回内容完全相同的哈希组，仅用于回填后的人工核对。"""
+    sql = (
+        "SELECT content_hash, COUNT(*) AS cnt FROM reference_image "
+        "WHERE content_hash IS NOT NULL GROUP BY content_hash HAVING COUNT(*) > 1"
+    )
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        return cur.fetchall()
 
 
 def exists_by_source_id(source_id: str) -> bool:

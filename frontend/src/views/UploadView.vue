@@ -147,6 +147,12 @@ function formatSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+function formatSkipped(files: string[] | undefined, count: number): string {
+  if (!files?.length) return ''
+  const shown = files.slice(0, 3).join('、')
+  return files.length > 3 ? `（已存在: ${shown} 等 ${count} 张）` : `（已存在: ${shown}）`
+}
+
 function openFile() {
   fileInputRef.value?.click()
 }
@@ -245,13 +251,17 @@ function startPolling() {
 
         if (status.errors.length > 0) {
           message.warning(
-            `导入完成: 新增 ${status.imported} 张, 跳过 ${status.skipped} 张, 失败 ${status.errors.length} 张`,
+            `导入完成: 新增 ${status.imported} 张, 跳过 ${status.skipped} 张, 失败 ${status.errors.length} 张` +
+              formatSkipped(status.skipped_files, status.skipped),
             { duration: 5000 },
           )
         } else if (status.imported === 0 && status.skipped === 0) {
           message.info('导入目录中没有找到新图片')
         } else {
-          message.success(`导入完成: 新增 ${status.imported} 张, 跳过 ${status.skipped} 张`)
+          message.success(
+            `导入完成: 新增 ${status.imported} 张, 跳过 ${status.skipped} 张` +
+              formatSkipped(status.skipped_files, status.skipped),
+          )
         }
 
         statusText.value = `导入完成: 新增 ${status.imported} 张` +
@@ -291,13 +301,20 @@ function startUploadPolling() {
 
         if (status.errors.length > 0) {
           message.warning(
-            `上传完成: 成功 ${status.saved} 张, 跳过 ${status.skipped} 张, 失败 ${status.errors.length} 张`,
+            `上传完成: 成功 ${status.saved} 张, 跳过 ${status.skipped} 张, 失败 ${status.errors.length} 张` +
+              formatSkipped(status.skipped_files, status.skipped),
             { duration: 5000 },
           )
         } else if (status.saved === 0 && status.skipped > 0) {
-          message.info(`上传完成: 全部 ${status.skipped} 张均为重复图片，已跳过`)
+          message.info(
+            `上传完成: 全部 ${status.skipped} 张均为重复图片，已跳过` +
+              formatSkipped(status.skipped_files, status.skipped),
+          )
         } else {
-          message.success(`上传完成: 成功保存 ${status.saved} 张, 跳过 ${status.skipped} 张`)
+          message.success(
+            `上传完成: 成功保存 ${status.saved} 张, 跳过 ${status.skipped} 张` +
+              formatSkipped(status.skipped_files, status.skipped),
+          )
         }
 
         statusText.value = `上传完成: 成功 ${status.saved} 张` +

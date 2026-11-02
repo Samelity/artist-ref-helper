@@ -24,6 +24,18 @@
       <n-button type="primary" size="small" :disabled="!selectedCount" @click="openBatchPicker">
         加入灵感板
       </n-button>
+      <n-button
+        type="error"
+        size="small"
+        :loading="deleting"
+        :disabled="!selectedCount || deleting"
+        @click="requestBatchDelete"
+      >
+        <template #icon>
+          <AppIcon name="trash" :size="14" />
+        </template>
+        删除所选
+      </n-button>
     </SelectionBar>
 
     <StatusBar :text="statusText" :loading="loading" />
@@ -32,8 +44,10 @@
       :empty-text="emptyText"
       :selection-mode="selectionMode"
       :selected-ids="selectedIds"
+      allow-delete
       @add-to-board="openBoardPicker"
       @toggle-select="toggleSelect"
+      @delete="requestSingleDelete"
     />
 
     <PaginationBar
@@ -56,7 +70,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onMounted, ref } from 'vue'
-import { NButton, useMessage } from 'naive-ui'
+import { NButton, useDialog, useMessage } from 'naive-ui'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import StatusBar from '@/components/common/StatusBar.vue'
 import PaginationBar from '@/components/common/PaginationBar.vue'
@@ -64,14 +78,16 @@ import SelectionBar from '@/components/common/SelectionBar.vue'
 import SelectionToggle from '@/components/common/SelectionToggle.vue'
 import SearchResultGrid from '@/components/search/SearchResultGrid.vue'
 import BoardPicker from '@/components/board/BoardPicker.vue'
+import AppIcon from '@/components/common/AppIcon.vue'
 import { useImageSelection } from '@/composables/useImageSelection'
-import { browseImages } from '@/api/images'
+import { browseImages, deleteImages } from '@/api/images'
 import type { BatchAddResult } from '@/types/board'
 import type { ImageItem } from '@/types/image'
 
 defineOptions({ name: 'LibraryView' })
 
 const message = useMessage()
+const dialog = useDialog()
 const {
   mode: selectionMode,
   ids: selectedIds,
@@ -89,6 +105,7 @@ const page = ref(1)
 const total = ref(0)
 const totalPages = ref(0)
 const loading = ref(false)
+const deleting = ref(false)
 const statusText = ref('图库加载中...')
 
 const emptyText = computed(() =>
@@ -163,6 +180,60 @@ function onAddedToBoard(result: BatchAddResult) {
     message.info(`所选图片均已在「${result.board.name}」中`)
   }
   exitSelection()
+}
+
+function requestBatchDelete() {
+  const count = selectedCount.value
+  if (!count || deleting.value) return
+  dialog.warning({
+    title: '删除图片',
+    content: `确定要删除选中的 ${count} 张图片吗？图片文件会被永久删除，并从所有灵感板中移除。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: () => performDelete(Array.from(selectedIds.value)),
+  })
+}
+
+function requestSingleDelete(imageId: number) {
+  if (deleting.value) return
+  const image = images.value.find((item) => item.id === imageId)
+  const label = image?.fileName ? `「${image.fileName}」` : '这张图片'
+  dialog.warning({
+    title: '删除图片',
+    content: `确定要删除${label}吗？图片文件会被永久删除，并从所有灵感板中移除。`,
+    positiveText: '删除',
+    negativeText: '取消',
+    onPositiveClick: () => performDelete([imageId]),
+  })
+}
+
+async function performDelete(ids: number[]) {
+  if (deleting.value || !ids.length) return
+  deleting.value = true
+  try {
+    const result = await deleteImages(ids)
+    const parts = [`已删除 ${result.deleted} 张图片`]
+    if (result.missing.length) {
+      parts.push(`${result.missing.length} 张已不存在`)
+    }
+    if (result.errors.length) {
+      message.warning(parts.join('，') + '；' + result.errors[0], { duration: 6000 })
+    } else {
+      message.success(parts.join('，'))
+    }
+    exitSelection()
+    await load()
+  } catch (e: unknown) {
+    message.error('删除失败: ' + errorText(e))
+  } finally {
+    deleting.value = false
+  }
+}
+
+function errorText(e: unknown): string {
+  const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+  if (detail) return detail
+  return e instanceof Error ? e.message : String(e)
 }
 
 onMounted(load)

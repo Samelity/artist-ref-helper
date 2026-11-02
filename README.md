@@ -190,7 +190,7 @@ artist-ref-helper/
 | POST | `/api/images/index` | 重建 FAISS 索引 |
 | ALL | `/py/**` | 反向代理到 Python 服务（去掉 `/py` 前缀，流式转发；仅放行下方白名单） |
 
-`/py` 白名单：`/images/view`、`/pixabay/search`、`/pexels/search`、`/remote/save`、`/upload`、`/upload/status`、`/import`、`/import/status`，其余路径返回 404。
+`/py` 白名单：`/images/view`、`/images/delete`、`/pixabay/search`、`/pexels/search`、`/remote/save`、`/upload`、`/upload/status`、`/import`、`/import/status`，其余路径返回 404。
 
 ### 灵感板（Spring Boot :8080）
 
@@ -228,6 +228,7 @@ artist-ref-helper/
 | POST | `/search/text` | CLIP 文字检索 |
 | POST | `/search/image` | CLIP 图片检索 |
 | GET | `/images/view` | 图片文件代理 |
+| POST | `/images/delete` | 删除图片（请求体 `{"ids": [1, 2]}`，同时删库、删文件并压缩 FAISS 行号） |
 | GET | `/pixabay/search` | Pixabay 网络搜图 |
 | GET | `/pexels/search` | Pexels 网络搜图 |
 | POST | `/remote/save` | 保存远程图片并编码入库（仅允许 Pixabay / Pexels 域名） |

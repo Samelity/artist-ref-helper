@@ -37,6 +37,7 @@ public class PythonProxyFilter extends OncePerRequestFilter {
     /** 只放行前端实际使用的接口，避免把整个 Python 服务挂到公网入口上。 */
     private static final Set<String> ALLOWED_PATHS = Set.of(
             "/images/view",
+            "/images/delete",
             "/pixabay/search",
             "/pexels/search",
             "/remote/save",

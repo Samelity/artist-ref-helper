@@ -6,9 +6,11 @@
       :item="item"
       :selection-mode="selectionMode"
       :selected="selectedIds.has(item.id)"
+      :allow-delete="allowDelete"
       @preview="openPreview(i)"
       @add-to-board="(id, ev) => $emit('addToBoard', { imageId: id, event: ev })"
       @toggle-select="$emit('toggleSelect', item.id)"
+      @delete="$emit('delete', item.id)"
     />
   </div>
   <EmptyState v-else :text="emptyText" />
@@ -28,17 +30,20 @@ const props = withDefaults(
     emptyText?: string
     selectionMode?: boolean
     selectedIds?: Set<number>
+    allowDelete?: boolean
   }>(),
   {
     emptyText: '暂无结果',
     selectionMode: false,
     selectedIds: () => new Set<number>(),
+    allowDelete: false,
   },
 )
 
 defineEmits<{
   addToBoard: [payload: { imageId: number, event: MouseEvent }]
   toggleSelect: [imageId: number]
+  delete: [imageId: number]
 }>()
 
 const lightbox = useLightboxStore()

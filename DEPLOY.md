@@ -458,20 +458,6 @@ docker compose logs -f --tail=100 app python
 > - 批量上传经过 Spring Boot 的 `/py` 代理，等待响应头的超时是 300 秒（`clip.service.proxy-timeout-seconds`）。一次不要传太多，建议分批。
 > - 索引和数据库必须来自同一时间点。只恢复数据库、不恢复索引时，务必重建索引。
 
-### 5.4 可选：在容器里跑导入脚本
-
-正常情况下用页面导入即可。如果需要沿用旧的 `import_images.py` 流程：
-
-```powershell
-docker compose stop python
-docker compose run --rm -e SOURCE_DIR=/import python python import_images.py
-docker compose start python
-```
-
-`/import` 对应 `D:\artist-data\import`（只读挂载），脚本会把图片复制到 `/data/storage` 并写入数据库和索引。
-
-> 注意：必须在 `app` 已经启动过一次（表已创建）之后执行。脚本运行期间不要同时让 Python 服务写索引，所以先 `stop python`。
-
 ---
 
 ## 6. 验收清单
@@ -868,7 +854,6 @@ Exception: Applying patch failed
 | `PIXABAY_API_KEY` | Python | 空 | 否 | Pixabay 网络搜图 |
 | `PEXELS_API_KEY` | Python | 空 | 否 | Pexels 备用源（Key 失效不影响本地检索） |
 | `BAIDU_APPID` / `BAIDU_APPKEY` | Python | 空 | 否 | 中文查询转英文 |
-| `SOURCE_DIR` | Python（仅 import_images.py） | 无 | 否 | 一次性导入脚本的源目录 |
 
 `STORAGE_DIR` / `MODEL_DIR` / `INDEX_DIR` / `IMPORT_DIR` 统一在 [python-service/paths.py](python-service/paths.py) 中解析为绝对路径，开发环境不设置时落在 `python-service/` 下。
 

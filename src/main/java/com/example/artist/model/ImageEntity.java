@@ -50,7 +50,7 @@ public class ImageEntity {
     @Transient
     private Double score;
 
-    /** 文件内容 SHA-256，用于上传/导入去重；存量数据由 backfill_content_hash.py 补齐。 */
+    /** 文件内容 SHA-256，用于上传/导入去重。 */
     @Column(name = "content_hash", length = 64)
     private String contentHash;
 }

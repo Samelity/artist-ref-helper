@@ -53,7 +53,6 @@ Spring Boot (:8080)  ──/py/**──►  Python FastAPI (:8000)
 ```bash
 # 必需
 set DB_PASSWORD=your_postgres_password
-set SOURCE_DIR=C:\path\to\your\images    # 本地图片源目录（import_images.py 使用）
 
 # 可选 - 网络搜图
 set PIXABAY_API_KEY=your_pixabay_key
@@ -71,28 +70,7 @@ set IMPORT_DIR=\\NAS\refs
 
 确保 PostgreSQL 在 `localhost:5432` 运行，数据库名为 `postgres`。表结构由 Hibernate 自动创建（`ddl-auto: update`）。
 
-### 3. 导入本地图片（首次运行必需）
-
-**首次运行必须执行此步骤**，否则没有可用的 FAISS 索引，搜索将始终返回空结果。
-
-设置环境变量并运行导入脚本：
-
-```bash
-# 设置图片源目录（必需）
-set SOURCE_DIR=C:\path\to\your\images
-
-cd python-service
-python import_images.py
-```
-
-脚本会：
-1. 从 `SOURCE_DIR` 复制图片到 `storage/` 目录
-2. 写入 PostgreSQL 数据库
-3. 用 CLIP 编码图片并构建 FAISS 索引
-
-> **提示**：已有 `storage/` 目录和 `index/` 索引时可跳过此步骤。
-
-### 4. 启动 Python 微服务
+### 3. 启动 Python 微服务
 
 ```bash
 cd python-service
@@ -110,7 +88,7 @@ python search_service.py
 
 > **Windows 用户注意**：cn_clip 安装可能需要先安装二进制 wheel，再 `pip install cn_clip --no-deps`。详见 [lmdb 构建问题](https://github.com/OFA-Sys/Chinese-CLIP/issues)。
 
-### 5. 构建前端（必需）
+### 4. 构建前端（必需）
 
 `src/main/resources/static/` 是构建产物，已加入 `.gitignore`、**不入库**，因此克隆项目后必须先构建，否则 Spring Boot 无页面可托管。
 
@@ -137,17 +115,19 @@ npm run dev
 > **方式 B** 下 Vite 开发服务器把 `/api`、`/py` 都代理到 Spring Boot (8080)，再由 Spring Boot 把 `/py/**` 转发给 Python (8000)，与生产方式完全一致，因此启动 Vite 时两个后端服务都要跑。
 > **方式 A** 下浏览器只访问 8080，`/py/**` 由 Spring Boot 转发到 `clip.service.base-url`（默认 `http://127.0.0.1:8000`），与开发环境行为一致。
 
-### 6. 启动 Spring Boot
+### 5. 启动 Spring Boot
 
 ```bash
 # 项目根目录
 mvn spring-boot:run
 ```
 
-### 7. 访问应用
+### 6. 访问应用
 
 - 生产构建方式：浏览器打开 **http://localhost:8080**
 - Vite 开发方式：浏览器打开 **http://localhost:5173**
+
+首次使用时 FAISS 索引为空：在「导入图片」页上传图片，索引会自动建立；如果数据库里已有图片记录，点侧边栏底部的「重建索引」。
 
 ## 项目结构
 
@@ -191,7 +171,6 @@ artist-ref-helper/
 │   ├── search_service.py                # FastAPI 主服务
 │   ├── clip_embedding.py                # CLIP 模型加载与编码
 │   ├── db.py                            # PostgreSQL 直连（psycopg）
-│   ├── import_images.py                 # 批量图片导入脚本（首次启动前必需运行）
 │   ├── requirements.txt                 # Python 依赖
 │   ├── models/                          # Chinese-CLIP 模型权重
 │   ├── storage/                         # 本地图片存储（统一目录）

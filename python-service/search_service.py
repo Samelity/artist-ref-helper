@@ -73,7 +73,7 @@ if os.path.exists(INDEX_PATH) and os.path.exists(IDS_PATH):
     logger.info(f"Index loaded: {index.ntotal} vectors, dimension={index.d}")
 else:
     logger.warning(f"FAISS index not found at {INDEX_PATH}, creating empty index. "
-                   f"Please run import_images.py first to populate the index.")
+                   f"请在「导入图片」页上传图片，或点击侧边栏「重建索引」.")
     # 创建空的 FAISS 索引（维度 768 对应 ViT-L-14）
     index = faiss.IndexFlatIP(768)
     id_map = {}

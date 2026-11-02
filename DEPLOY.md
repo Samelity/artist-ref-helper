@@ -512,6 +512,8 @@ docker compose exec python tail -n 200 /app/logs/image_service.log
 
 容器的代码是打进镜像里的，改了代码必须重建镜像再替换容器；图片、索引、模型在宿主目录，数据库在命名卷，重建都不会丢。
 
+> **从「收藏时间排序」之前的版本升级时，先执行 7.2.1 的 SQL，再开始下面的构建。**
+
 先按改动范围决定重建谁：
 
 | 改动内容 | 操作 |
@@ -556,6 +558,39 @@ docker compose logs --tail=200 app python
 > - 表结构由 Hibernate `ddl-auto: update` 自动加表、加列；删列、改类型、重命名不会自动处理，这类改动要自己写 SQL。
 > - 回滚：把备份标签重新打回 `latest`（如 `docker tag artist-ref-app:backup-20261030 artist-ref-app:latest`），再 `docker compose up -d`。
 > - 更新前建议先做一次备份（见 7.3）。
+
+### 7.2.1 一次性迁移：给 `board_images` 加加入时间
+
+灵感板图片改为按「加入时间倒序」展示后，收藏关系表 `board_images` 多了一个 `added_at` 列。
+实体把它声明为 `NOT NULL`，而 Hibernate 的 `ddl-auto: update` 无法给**已有数据**的表直接加非空列，
+所以已有库必须在部署新镜像前手动执行一次：
+
+```powershell
+docker compose exec postgres psql -U artist -d artist_ref -c "ALTER TABLE board_images ADD COLUMN IF NOT EXISTS added_at timestamptz; UPDATE board_images bi SET added_at = COALESCE(ri.created_at, now()) FROM reference_image ri WHERE ri.id = bi.image_id AND bi.added_at IS NULL; UPDATE board_images SET added_at = now() WHERE added_at IS NULL; ALTER TABLE board_images ALTER COLUMN added_at SET DEFAULT now(); ALTER TABLE board_images ALTER COLUMN added_at SET NOT NULL;"
+```
+
+各步作用：
+
+| 步骤 | 作用 |
+|------|------|
+| `ADD COLUMN IF NOT EXISTS` | 先建成可空列，避免非空约束直接失败；已存在则跳过 |
+| 第一个 `UPDATE` | 历史收藏行用**图片入库时间**近似回填（真实收藏时间无法还原） |
+| 第二个 `UPDATE` | 兜底：关联到已删图片的行填当前时间，保证下一步不报错 |
+| `SET DEFAULT now()` | Hibernate 每次都会显式写入时间，这里只作为手工插库时的保险 |
+| `SET NOT NULL` | 与实体声明对齐，排序时不会出现 NULL 排在最前的情况 |
+
+验证：
+
+```powershell
+docker compose exec postgres psql -U artist -d artist_ref -c "SELECT count(*) AS total, count(added_at) AS with_time FROM board_images;"
+```
+
+两个数字应当相等。
+
+> 注意：
+> - 全新部署（数据库里还没有 `board_images` 表或表为空）**不需要**执行本节，Hibernate 建表时会直接带上这一列。
+> - 跳过这一步的后果：`app` **照样会启动**。Hibernate 的 schema 迁移失败只记一条 WARN（`GenerationTarget encountered exception accepting command`，`column "added_at" ... contains null values`）然后继续启动，列实际并不存在；之后所有灵感板接口都会在请求时报错（查询 `column bi.added_at does not exist`、收藏写入失败）。执行完上面的 SQL 后**不需要重启**，接口立即恢复正常。
+> - 历史数据统一回填后，旧收藏之间会按图片入库时间倒序排列；此后新加入的图片才会真正排在最前。
 
 ### 7.3 备份
 

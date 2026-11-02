@@ -513,6 +513,8 @@ docker compose exec python tail -n 200 /app/logs/image_service.log
 容器的代码是打进镜像里的，改了代码必须重建镜像再替换容器；图片、索引、模型在宿主目录，数据库在命名卷，重建都不会丢。
 
 > **从「收藏时间排序」之前的版本升级时，先执行 7.2.1 的 SQL，再开始下面的构建。**
+>
+> **升级到「内容哈希去重」版本时，按本节完成构建并启动 `app` 后，再执行 7.2.2 回填存量图片的 `content_hash`。**
 
 先按改动范围决定重建谁：
 
@@ -591,6 +593,47 @@ docker compose exec postgres psql -U artist -d artist_ref -c "SELECT count(*) AS
 > - 全新部署（数据库里还没有 `board_images` 表或表为空）**不需要**执行本节，Hibernate 建表时会直接带上这一列。
 > - 跳过这一步的后果：`app` **照样会启动**。Hibernate 的 schema 迁移失败只记一条 WARN（`GenerationTarget encountered exception accepting command`，`column "added_at" ... contains null values`）然后继续启动，列实际并不存在；之后所有灵感板接口都会在请求时报错（查询 `column bi.added_at does not exist`、收藏写入失败）。执行完上面的 SQL 后**不需要重启**，接口立即恢复正常。
 > - 历史数据统一回填后，旧收藏之间会按图片入库时间倒序排列；此后新加入的图片才会真正排在最前。
+
+### 7.2.2 一次性迁移：回填 `content_hash`（内容去重）
+
+图片去重从「文件名」改为「文件内容 SHA-256」后，`reference_image` 多了可空列 `content_hash`。
+可空列由 Hibernate `ddl-auto: update` 自动添加，**不需要手写 SQL**；但存量记录的该列是 `NULL`，
+不补齐的话，新上传的图片只和「已回填的图」比对，去重会漏。
+
+部署顺序：
+
+1. 按 7.2 重建并启动 `app`（新镜像包含 `content_hash` 字段），确认列已创建：
+
+```powershell
+docker compose exec postgres psql -U artist -d artist_ref -c "SELECT column_name FROM information_schema.columns WHERE table_name='reference_image' AND column_name='content_hash';"
+```
+
+有输出即已创建。若没有输出，先看 `docker compose logs --tail=100 app`；也可以手动补列后重启 `app`：
+
+```powershell
+docker compose exec postgres psql -U artist -d artist_ref -c "ALTER TABLE reference_image ADD COLUMN IF NOT EXISTS content_hash varchar(64);"
+docker compose restart app
+```
+
+2. 在 `python` 容器里执行回填脚本（可重复执行，只处理 `content_hash IS NULL` 的行）：
+
+```powershell
+docker compose exec python python backfill_content_hash.py
+```
+
+3. 验证：
+
+```powershell
+docker compose exec postgres psql -U artist -d artist_ref -c "SELECT count(*) AS total, count(content_hash) AS with_hash FROM reference_image;"
+```
+
+两个数字应当相等。若脚本报告「缺文件 N 条」，说明这些数据库记录对应的图片已不在 `D:\artist-data\storage` 中，脚本会保留它们的 `content_hash` 为 `NULL` 并继续。
+
+> 注意：
+> - 脚本只读取存储目录、写 `content_hash` 一列，不修改或删除任何图片。
+> - 脚本结束时会打印「内容完全相同的图片」分组，**仅作提示，不会自动删除**；是否合并需要人工处理。
+> - 回填完成前上传的新图片不会与存量图片判重，建议升级后尽快执行一次。
+> - 去重只认「字节完全一致」。同一张图的不同尺寸、不同压缩版本会正常入库，这是预期行为。
 
 ### 7.3 备份
 

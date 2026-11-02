@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 import db
 from clip_embedding import IMAGE_EXTS, encode_one
+from hash_utils import sha256_bytes, sha256_file
 from logger import logger
 from paths import (
     IDS_PATH,
@@ -543,6 +544,17 @@ def remote_save(req: SaveRequest):
 
             _download_image(photo.url, abs_path)
 
+            content_hash = sha256_file(abs_path)
+            existing_id = db.exists_by_hash(content_hash)
+            if existing_id is not None:
+                try:
+                    os.remove(abs_path)
+                except OSError:
+                    logger.warning(f"[remote] 删除重复下载文件失败: {abs_path}")
+                skipped += 1
+                logger.info(f"[remote] 跳过重复内容: {photo.id} (已存在 id={existing_id})")
+                continue
+
             img = Image.open(abs_path)
             img.load()
             vec = encode_one(model, preprocess, img, device)
@@ -554,6 +566,7 @@ def remote_save(req: SaveRequest):
                 source_id=photo.id,
                 source_url=photo.url,
                 photographer=photo.photographer,
+                content_hash=content_hash,
             )
 
             index.add(vec)
@@ -588,6 +601,27 @@ def remote_save(req: SaveRequest):
 
 # ---------- 本地图片上传 ----------
 
+MAX_SKIPPED_FILES = 100
+
+
+def _unique_storage_path(rel_path: str) -> str:
+    """返回 STORAGE_DIR 下不冲突的相对路径；重名时追加 -1、-2。"""
+    rel = Path(rel_path)
+    candidate = rel
+    n = 1
+    while os.path.exists(resolve_storage_path(candidate.as_posix())):
+        candidate = rel.with_name(f"{rel.stem}-{n}{rel.suffix}")
+        n += 1
+    return candidate.as_posix()
+
+
+def _record_skipped(progress: dict, name: str) -> None:
+    """记录被跳过的文件名（有上限，避免状态接口返回过长）。调用方需持锁。"""
+    files = progress["skipped_files"]
+    if len(files) < MAX_SKIPPED_FILES:
+        progress["skipped_files"] = files + [name]
+
+
 _upload_progress = {
     "running": False,
     "current": 0,
@@ -596,6 +630,7 @@ _upload_progress = {
     "saved": 0,
     "skipped": 0,
     "errors": [],
+    "skipped_files": [],
 }
 _upload_lock = threading.Lock()
 
@@ -630,7 +665,7 @@ async def upload_images(files: list[UploadFile] = File(...), bg: BackgroundTasks
     with _upload_lock:
         _upload_progress.update(
             running=True, current=0, total=len(file_data),
-            current_file="", saved=0, skipped=0, errors=[],
+            current_file="", saved=0, skipped=0, errors=[], skipped_files=[],
         )
 
     bg.add_task(_run_upload, file_data)
@@ -661,16 +696,19 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                     continue
 
                 try:
-                    stem = Path(original_name).stem
-                    file_name = f"{stem}{suffix}"
-                    abs_path = resolve_storage_path(file_name)
-
-                    if os.path.exists(abs_path):
+                    content_hash = sha256_bytes(content)
+                    existing_id = db.exists_by_hash(content_hash)
+                    if existing_id is not None:
                         skipped += 1
                         with _upload_lock:
                             _upload_progress["skipped"] = skipped
-                        logger.info(f"[upload] 跳过已存在: {file_name}")
+                            _record_skipped(_upload_progress, original_name)
+                        logger.info(f"[upload] 跳过重复内容: {original_name} (已存在 id={existing_id})")
                         continue
+
+                    stem = Path(original_name).stem or "image"
+                    file_name = _unique_storage_path(f"{stem}{suffix}")
+                    abs_path = resolve_storage_path(file_name)
 
                     with open(abs_path, "wb") as f:
                         f.write(content)
@@ -679,7 +717,9 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                     img.load()
                     vec = encode_one(model, preprocess, img, device)
 
-                    db_id = db.insert_image(file_name=file_name, file_path=file_name)
+                    db_id = db.insert_image(
+                        file_name=file_name, file_path=file_name, content_hash=content_hash,
+                    )
 
                     index.add(vec)
                     faiss_id = next_faiss_id
@@ -720,7 +760,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
 def upload_status():
     """返回当前上传进度，前端轮询此接口。"""
     with _upload_lock:
-        return dict(_upload_progress)
+        return {**_upload_progress, "skipped_files": list(_upload_progress["skipped_files"])}
 
 
 # ---------- 共享目录批量导入 ----------
@@ -733,6 +773,7 @@ _import_progress = {
     "imported": 0,
     "skipped": 0,
     "errors": [],
+    "skipped_files": [],
 }
 _import_lock = threading.Lock()
 
@@ -773,7 +814,7 @@ def import_from_directory(bg: BackgroundTasks):
     with _import_lock:
         _import_progress.update(
             running=True, current=0, total=len(relative_files),
-            current_file="", imported=0, skipped=0, errors=[],
+            current_file="", imported=0, skipped=0, errors=[], skipped_files=[],
         )
 
     bg.add_task(_run_import, source_dir, relative_files)
@@ -803,14 +844,18 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
                     _import_progress["current_file"] = file_name
 
                 try:
-                    abs_path = resolve_storage_path(file_name)
-
-                    if os.path.exists(abs_path):
+                    content_hash = sha256_file(source_dir / rel)
+                    existing_id = db.exists_by_hash(content_hash)
+                    if existing_id is not None:
                         skipped += 1
                         with _import_lock:
                             _import_progress["skipped"] = skipped
-                        logger.info(f"[import] 跳过已存在: {file_name}")
+                            _record_skipped(_import_progress, file_name)
+                        logger.info(f"[import] 跳过重复内容: {file_name} (已存在 id={existing_id})")
                         continue
+
+                    file_name = _unique_storage_path(file_name)
+                    abs_path = resolve_storage_path(file_name)
 
                     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
                     shutil.copy2(str(source_dir / rel), abs_path)
@@ -819,7 +864,9 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
                     img.load()
                     vec = encode_one(model, preprocess, img, device)
 
-                    db_id = db.insert_image(file_name=file_name, file_path=file_name)
+                    db_id = db.insert_image(
+                        file_name=file_name, file_path=file_name, content_hash=content_hash,
+                    )
 
                     index.add(vec)
                     faiss_id = next_faiss_id
@@ -860,7 +907,7 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
 def import_status():
     """返回当前导入进度，前端轮询此接口。"""
     with _import_lock:
-        return dict(_import_progress)
+        return {**_import_progress, "skipped_files": list(_import_progress["skipped_files"])}
 
 
 # ---------- 灵感板 ----------

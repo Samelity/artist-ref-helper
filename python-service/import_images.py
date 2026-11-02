@@ -10,6 +10,7 @@ torch.set_num_threads(os.cpu_count())
 
 import db
 from clip_embedding import IMAGE_EXTS, encode_one
+from hash_utils import sha256_file
 from logger import logger
 from paths import (
     IDS_PATH,
@@ -49,7 +50,7 @@ def import_images():
         if existing:
             logger.info(f"Skip duplicated {src.name}")
             continue
-        new_id = db.insert_image(src.name, src.name)
+        new_id = db.insert_image(src.name, src.name, content_hash=sha256_file(src))
         logger.info(f"Imported id={new_id} file={src.name}")
 
     build_index_from_db()

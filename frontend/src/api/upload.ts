@@ -13,6 +13,7 @@ export interface UploadStatus {
   saved: number
   skipped: number
   errors: string[]
+  skipped_files: string[]
 }
 
 export interface ImportResponse {
@@ -28,6 +29,7 @@ export interface ImportStatus {
   imported: number
   skipped: number
   errors: string[]
+  skipped_files: string[]
 }
 
 export async function uploadImages(files: File[]): Promise<UploadResponse> {

@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 import os
 import re
@@ -80,6 +81,21 @@ else:
 
 logger.info("Image Service started successfully")
 
+# 上传、导入、远程保存、重建与删除都会改写 FAISS 行号，统一串行执行。
+# 行号一旦错位，Java 侧反查到的图片元数据就会张冠李戴。
+_index_mutation_lock = threading.RLock()
+
+
+def _serialized_index_mutation(func):
+    """把一次索引写操作包进全局锁；异步函数需自行用 to_thread 包装内部同步函数。"""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _index_mutation_lock:
+            return func(*args, **kwargs)
+
+    return wrapper
+
 # ---------- FastAPI ----------
 app = FastAPI(title="Reference Image Search")
 
@@ -118,22 +134,25 @@ def _encode_image(image: Image.Image) -> np.ndarray:
 
 
 def _search(vector: np.ndarray, topK: int, threshold: float) -> SearchResponse:
+    # 读取一次快照，避免删除/重建压缩行号时拿到新旧混杂的 index 与 id_map
+    idx, imap = index, id_map
+
     # 索引为空（未建或被清空）时直接返回空结果，避免 NoneType 崩栈
-    if index is None or index.ntotal == 0:
+    if idx is None or idx.ntotal == 0:
         return SearchResponse(items=[])
 
-    k = min(topK, index.ntotal)
-    scores, ids = index.search(vector, k)
+    k = min(topK, idx.ntotal)
+    scores, ids = idx.search(vector, k)
 
     items = []
-    for score, idx in zip(scores[0], ids[0]):
-        if idx < 0 or score < threshold:
+    for score, idx_row in zip(scores[0], ids[0]):
+        if idx_row < 0 or score < threshold:
             continue
-        sid = str(int(idx))
-        meta = id_map.get(sid)
+        sid = str(int(idx_row))
+        meta = imap.get(sid)
         if not meta:
             # id_map 里没有则回查数据库兜底
-            row = db.get_by_faiss_id(int(idx))
+            row = db.get_by_faiss_id(int(idx_row))
             if not row:
                 continue
             meta = {"fileName": row["file_name"], "filePath": row["file_path"]}
@@ -182,6 +201,7 @@ def search_by_image(file: UploadFile = File(...),  # noqa: B008
 
 
 @app.post("/index")
+@_serialized_index_mutation
 def rebuild_index():
     """
     以 PG 为唯一事实源重建 FAISS。
@@ -295,6 +315,132 @@ def view_image(path: str):
 
     # 带缓存头，前端二次加载直接走浏览器缓存，不重复读盘
     return FileResponse(abs_path, headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ---------- 删除图片 ----------
+
+class DeleteImagesRequest(BaseModel):
+    ids: list[int]
+
+
+class DeleteImagesResponse(BaseModel):
+    deleted: int
+    missing: list[int]
+    errors: list[str]
+
+
+@app.post("/images/delete", response_model=DeleteImagesResponse)
+def delete_images(req: DeleteImagesRequest):
+    """
+    从图库删除图片：删除 PG 记录（含灵感板关联）与物理文件，并把 FAISS 行号压缩回填。
+    只搬运已有向量，不做 CLIP 编码，因此批量删除也很快。
+    """
+    ids = sorted({int(image_id) for image_id in req.ids if image_id > 0})
+    if not ids:
+        raise HTTPException(status_code=400, detail="请选择要删除的图片")
+
+    # 上传/导入/重建会长时间占用索引；短超时快速失败，避免浏览器干等
+    if not _index_mutation_lock.acquire(timeout=0.5):
+        raise HTTPException(status_code=409, detail="图库正在上传、导入或重建索引，请稍后再删除")
+    try:
+        return _delete_images_locked(ids)
+    finally:
+        _index_mutation_lock.release()
+
+
+def _delete_images_locked(ids: list[int]) -> DeleteImagesResponse:
+    rows = db.get_images_by_ids(ids)
+    if not rows:
+        return DeleteImagesResponse(deleted=0, missing=ids, errors=[])
+
+    found_ids = {row["id"] for row in rows}
+    missing = [image_id for image_id in ids if image_id not in found_ids]
+
+    removed_rows = set()
+    if index is not None:
+        for row in rows:
+            fid = row["faiss_id"]
+            if fid is not None and 0 <= fid < index.ntotal:
+                removed_rows.add(int(fid))
+
+    deleted = db.delete_images(sorted(found_ids))
+    logger.info(f"[delete] 已删除记录 {deleted} 条: ids={sorted(found_ids)} "
+                f"faiss_rows={sorted(removed_rows)}")
+
+    errors: list[str] = []
+    _remove_image_files(rows, errors)
+
+    if removed_rows:
+        try:
+            _compact_index_after_delete(removed_rows)
+        except Exception as e:  # noqa: BLE001
+            # 记录与文件已删除，索引不一致可通过重建索引恢复
+            errors.append(f"索引更新失败，请重建索引: {e}")
+            logger.exception("[delete] FAISS 索引压缩失败")
+
+    return DeleteImagesResponse(deleted=deleted, missing=missing, errors=errors)
+
+
+def _remove_image_files(rows: list[dict], errors: list[str]) -> None:
+    """删除图片物理文件；路径必须落在白名单内，且不能仍被其他记录引用。"""
+    storage_root = os.path.realpath(STORAGE_DIR)
+    rel_paths = [row["file_path"] for row in rows if row["file_path"]]
+    still_used = db.referenced_file_paths(rel_paths)
+
+    for rel_path in rel_paths:
+        if rel_path in still_used:
+            logger.warning(f"[delete] 文件仍被其他记录引用，跳过: {rel_path}")
+            continue
+        abs_path = resolve_storage_path(rel_path)
+        if abs_path == storage_root or not _is_allowed(abs_path):
+            logger.warning(f"[delete] 跳过非法文件路径: {rel_path} -> {abs_path}")
+            continue
+        try:
+            if os.path.isfile(abs_path):
+                os.remove(abs_path)
+                logger.info(f"[delete] 已删除文件: {rel_path}")
+        except OSError as e:
+            errors.append(f"{rel_path}: 文件删除失败: {e}")
+            logger.warning(f"[delete] 删除文件失败: {abs_path}: {e}")
+
+
+def _compact_index_after_delete(removed_rows: set[int]) -> None:
+    """移除指定 FAISS 行并压缩行号，同步更新 PG 绑定、id_map 与磁盘索引文件。"""
+    global index, id_map
+
+    n = index.ntotal
+    keep = np.ones(n, dtype=bool)
+    keep[list(removed_rows)] = False
+
+    remaining = index.reconstruct_n(0, n)[keep]
+    new_index = faiss.IndexFlatIP(index.d)
+    if remaining.shape[0]:
+        new_index.add(np.ascontiguousarray(remaining))
+
+    old_to_new = np.cumsum(keep) - 1
+    bindings: list[tuple[int, int]] = []
+    new_map: dict[str, dict] = {}
+    for row in db.list_faiss_bindings():
+        old = row["faiss_id"]
+        if old is None or not 0 <= old < n or not keep[old]:
+            continue
+        new = int(old_to_new[old])
+        bindings.append((new, row["id"]))
+        new_map[str(new)] = {
+            "id": row["id"],
+            "fileName": row["file_name"],
+            "filePath": row["file_path"],
+        }
+
+    # 以 PG 为准：先落库再写文件，中途失败时重建索引即可恢复
+    db.replace_faiss_ids(bindings)
+    faiss.write_index(new_index, INDEX_PATH)
+    with open(IDS_PATH, "w", encoding="utf-8") as f:
+        json.dump(new_map, f, ensure_ascii=False, indent=2)
+
+    index = new_index
+    id_map = new_map
+    logger.info(f"[delete] FAISS 行号压缩完成: {n} -> {new_index.ntotal}")
 
 
 # ---------- 网络搜图：通用模型 ----------
@@ -515,6 +661,7 @@ def _download_image(url: str, save_path: str, timeout: int = 30) -> None:
 
 
 @app.post("/remote/save", response_model=SaveResponse)
+@_serialized_index_mutation
 def remote_save(req: SaveRequest):
     """
     下载用户选中的远程图片（Pixabay / Pexels），CLIP 编码后增量追加到 FAISS 索引。
@@ -676,6 +823,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
     """后台线程处理上传文件：保存 → CLIP 编码 → 入库 → 追加 FAISS。"""
     global index, id_map
 
+    @_serialized_index_mutation
     def _do_upload():
         global index, id_map
 
@@ -825,6 +973,7 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
     """后台线程执行实际导入，逐文件更新进度。"""
     global index, id_map
 
+    @_serialized_index_mutation
     def _do_import():
         global index, id_map
 

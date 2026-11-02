@@ -1,4 +1,4 @@
-import { javaHttp } from './http'
+import { javaHttp, pythonHttp } from './http'
 import type { ImageItem, ImagePage } from '@/types/image'
 
 export interface SearchByTextParams {
@@ -28,5 +28,17 @@ export async function rebuildIndex(): Promise<{ indexedCount: number }> {
 
 export async function browseImages(page = 1): Promise<ImagePage> {
   const resp = await javaHttp.get<ImagePage>('/api/images/browse', { params: { page } })
+  return resp.data
+}
+
+export interface DeleteImagesResult {
+  deleted: number
+  missing: number[]
+  errors: string[]
+}
+
+/** 删除图库图片：经 /py 代理到 Python 服务，同时删库、删文件并压缩 FAISS。 */
+export async function deleteImages(ids: number[]): Promise<DeleteImagesResult> {
+  const resp = await pythonHttp.post<DeleteImagesResult>('/images/delete', { ids })
   return resp.data
 }

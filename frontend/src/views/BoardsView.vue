@@ -2,7 +2,7 @@
   <section class="view">
     <PageHeader
       title="灵感板"
-      description="把检索到的参考图按项目或风格归类整理，随时打包导出给美术。"
+      description="把检索到的参考图按项目或风格归类整理。"
     />
 
     <div class="board-layout">

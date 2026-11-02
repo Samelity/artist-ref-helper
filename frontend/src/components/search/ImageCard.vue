@@ -26,16 +26,27 @@
       <span v-if="selectionMode" class="check" :class="{ on: selected }" aria-hidden="true">
         <AppIcon v-if="selected" name="check" :size="14" :stroke-width="2.4" />
       </span>
-      <button
-        v-else
-        class="add"
-        type="button"
-        title="添加到灵感板"
-        aria-label="添加到灵感板"
-        @click.stop="$emit('addToBoard', item.id, $event)"
-      >
-        <AppIcon name="plus" :size="16" :stroke-width="2.2" />
-      </button>
+      <template v-else>
+        <button
+          v-if="allowDelete"
+          class="del"
+          type="button"
+          title="从图库删除"
+          aria-label="从图库删除"
+          @click.stop="$emit('delete')"
+        >
+          <AppIcon name="trash" :size="15" />
+        </button>
+        <button
+          class="add"
+          type="button"
+          title="添加到灵感板"
+          aria-label="添加到灵感板"
+          @click.stop="$emit('addToBoard', item.id, $event)"
+        >
+          <AppIcon name="plus" :size="16" :stroke-width="2.2" />
+        </button>
+      </template>
     </div>
     <div class="info">
       <p class="name" :title="item.fileName || ''">{{ item.fileName || '(无文件名)' }}</p>
@@ -56,14 +67,16 @@ const props = withDefaults(
     item: ImageItem
     selectionMode?: boolean
     selected?: boolean
+    allowDelete?: boolean
   }>(),
-  { selectionMode: false, selected: false },
+  { selectionMode: false, selected: false, allowDelete: false },
 )
 
 const emit = defineEmits<{
   addToBoard: [imageId: number, event: MouseEvent]
   preview: []
   toggleSelect: []
+  delete: []
 }>()
 
 const mediaTitle = computed(() => {
@@ -227,6 +240,38 @@ function onToggleKey() {
   background: var(--brand-hover);
 }
 
+.del {
+  position: absolute;
+  right: 46px;
+  bottom: 8px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(17, 24, 39, 0.64);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease),
+    background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.image-card:hover .del,
+.del:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+
+.del:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
 .info {
   padding: 10px 12px 11px;
 }
@@ -248,7 +293,8 @@ function onToggleKey() {
 }
 
 @media (hover: none) {
-  .add {
+  .add,
+  .del {
     opacity: 1;
     transform: none;
   }

@@ -71,6 +71,63 @@ def unbind_faiss_ids(ids: list[int]) -> int:
         return cur.rowcount
 
 
+def list_faiss_bindings():
+    """返回所有已绑定 FAISS 行号的记录，按行号升序。"""
+    sql = (
+        "SELECT id, faiss_id, file_name, file_path FROM reference_image "
+        "WHERE faiss_id IS NOT NULL ORDER BY faiss_id"
+    )
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        return cur.fetchall()
+
+
+def replace_faiss_ids(pairs):
+    """整体替换 faiss_id 绑定。pairs = [(faiss_row, db_id), ...]
+
+    FAISS 行号有唯一约束，先全部置 NULL 再写入，避免行号压缩时中途撞上旧值。
+    """
+    with connect() as conn, conn.cursor() as cur:
+        with conn.transaction():
+            cur.execute("UPDATE reference_image SET faiss_id = NULL WHERE faiss_id IS NOT NULL")
+            if pairs:
+                cur.executemany(
+                    "UPDATE reference_image SET faiss_id = %s WHERE id = %s", pairs
+                )
+
+
+def get_images_by_ids(ids: list[int]):
+    """按主键批量查询图片，用于删除前取文件路径与 faiss_id。"""
+    if not ids:
+        return []
+    sql = "SELECT id, faiss_id, file_name, file_path FROM reference_image WHERE id = ANY(%s)"
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (ids,))
+        return cur.fetchall()
+
+
+def delete_images(ids: list[int]) -> int:
+    """删除图片记录及其灵感板关联，返回删除的图片行数。"""
+    if not ids:
+        return 0
+    with connect() as conn, conn.cursor() as cur:
+        with conn.transaction():
+            # board_images 对 reference_image 有外键约束，必须先删关联
+            cur.execute("DELETE FROM board_images WHERE image_id = ANY(%s)", (ids,))
+            cur.execute("DELETE FROM reference_image WHERE id = ANY(%s)", (ids,))
+            return cur.rowcount
+
+
+def referenced_file_paths(paths: list[str]) -> set[str]:
+    """返回仍然被其他记录引用的文件路径，删除物理文件前用于防止误删共享文件。"""
+    if not paths:
+        return set()
+    sql = "SELECT DISTINCT file_path FROM reference_image WHERE file_path = ANY(%s)"
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, (paths,))
+        return {row["file_path"] for row in cur.fetchall()}
+
+
 def insert_image_with_source(
     file_name: str,
     file_path: str,

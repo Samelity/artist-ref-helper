@@ -21,6 +21,17 @@ export function isSupportedImage(file: File): boolean {
   return !!MIME_EXT[file.type] || IMAGE_EXTS.includes(extOf(file.name))
 }
 
+/** 优先取 files；部分浏览器把粘贴的图片只放在 items 里，此时 files 为空。 */
+export function filesFromClipboard(data: DataTransfer | null): File[] {
+  if (!data) return []
+  const files = Array.from(data.files ?? [])
+  if (files.length) return files
+  return Array.from(data.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+}
+
 export function isEditableTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
   if (!el) return false
@@ -37,7 +48,7 @@ export function clipTimestamp(date = new Date()): string {
 
 /** 从粘贴事件里取受支持的图片；浏览器未提供 MIME 时按扩展名补齐。 */
 export function imagesFromPaste(e: ClipboardEvent): File[] {
-  const files = Array.from(e.clipboardData?.files ?? []).filter(isSupportedImage)
+  const files = filesFromClipboard(e.clipboardData).filter(isSupportedImage)
   return files.map((file) => {
     if (file.type.startsWith('image/')) return file
     const ext = extOf(file.name).slice(1) || 'png'

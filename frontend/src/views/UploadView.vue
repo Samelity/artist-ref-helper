@@ -97,7 +97,7 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import { uploadImages, getUploadStatus, importFromDirectory, getImportStatus } from '@/api/upload'
 import {
   clipTimestamp,
-  imagesFromPaste,
+  filesFromClipboard,
   isEditableTarget,
   isSupportedImage,
   normalizePastedImage,
@@ -187,8 +187,14 @@ function addFiles(fileList: FileList | File[]) {
 
 function onPaste(e: ClipboardEvent) {
   if (isEditableTarget(e.target)) return
-  const pasted = imagesFromPaste(e)
-  if (!pasted.length) return
+  const all = filesFromClipboard(e.clipboardData)
+  if (!all.length) return
+  const pasted = all.filter(isSupportedImage)
+  if (!pasted.length) {
+    e.preventDefault()
+    message.warning('剪贴板里的图片格式不支持，仅支持 JPG / PNG / WebP')
+    return
+  }
   if (uploading.value) {
     message.info('正在上传，请等待完成后再粘贴')
     return

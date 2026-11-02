@@ -117,7 +117,7 @@ def list_boards() -> list[dict]:
 
 
 def get_board_with_images(board_id: int) -> dict | None:
-    """查询单个灵感板及其关联图片。"""
+    """查询单个灵感板及其关联图片，图片按加入时间倒序（同批用 image_id 倒序兜底）。"""
     sql = "SELECT id, name, description, created_at FROM boards WHERE id = %s"
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, (board_id,))
@@ -130,7 +130,8 @@ def get_board_with_images(board_id: int) -> dict | None:
             "ri.source, ri.source_id, ri.source_url, ri.photographer "
             "FROM reference_image ri "
             "JOIN board_images bi ON bi.image_id = ri.id "
-            "WHERE bi.board_id = %s",
+            "WHERE bi.board_id = %s "
+            "ORDER BY bi.added_at DESC, bi.image_id DESC",
             (board_id,),
         )
         board["images"] = cur.fetchall()

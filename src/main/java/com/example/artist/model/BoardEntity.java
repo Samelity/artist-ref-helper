@@ -5,8 +5,6 @@ import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * 灵感板实体：一个板子可以有多个图片。
@@ -27,15 +25,6 @@ public class BoardEntity {
     private String name;
 
     private String description;
-
-    @ManyToMany(fetch = FetchType.LAZY)
-    @JoinTable(
-            name = "board_images",
-            joinColumns = @JoinColumn(name = "board_id"),
-            inverseJoinColumns = @JoinColumn(name = "image_id")
-    )
-    @Builder.Default
-    private List<ImageEntity> images = new ArrayList<>();
 
     @CreationTimestamp
     @Column(name = "created_at")

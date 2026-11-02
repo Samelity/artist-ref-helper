@@ -21,8 +21,8 @@
         <div class="dz-icon">
           <AppIcon name="upload" :size="24" />
         </div>
-        <p class="dz-title">点击选择图片，或拖拽文件到此处</p>
-        <p class="dz-hint">支持 JPG / PNG / WebP，可多选</p>
+        <p class="dz-title">点击选择、拖拽文件，或按 Ctrl+V 粘贴</p>
+        <p class="dz-hint">支持 JPG / PNG / WebP，可多选、可连续粘贴</p>
       </div>
       <input
         ref="fileInputRef"
@@ -89,12 +89,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { NButton, NProgress, useMessage } from 'naive-ui'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import StatusBar from '@/components/common/StatusBar.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import { uploadImages, getUploadStatus, importFromDirectory, getImportStatus } from '@/api/upload'
+import {
+  clipTimestamp,
+  filesFromClipboard,
+  isEditableTarget,
+  isSupportedImage,
+  normalizePastedImage,
+} from '@/utils/clipboard'
 
 defineOptions({ name: 'UploadView' })
 
@@ -110,7 +117,7 @@ const files = ref<FileItem[]>([])
 const isDragging = ref(false)
 const uploading = ref(false)
 const importing = ref(false)
-const statusText = ref('选择或拖拽图片文件到上方区域')
+const statusText = ref('选择、拖拽或 Ctrl+V 粘贴图片到上方区域')
 const progress = ref({ current: 0, total: 0, currentFile: '', imported: 0, skipped: 0 })
 const uploadProgress = ref({ current: 0, total: 0, currentFile: '', saved: 0, skipped: 0 })
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -169,29 +176,46 @@ function onDrop(e: DragEvent) {
   if (dt?.files) addFiles(dt.files)
 }
 
-function addFiles(fileList: FileList) {
-  const imageExts = ['.jpg', '.jpeg', '.png', '.webp']
+function addFiles(fileList: FileList | File[]) {
   for (const file of Array.from(fileList)) {
-    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase()
-    if (!imageExts.includes(ext)) continue
+    if (!isSupportedImage(file)) continue
     const thumb = URL.createObjectURL(file)
     files.value.push({ id: nextId++, file, thumb })
   }
   statusText.value = `已选 ${files.value.length} 张图片`
 }
 
+function onPaste(e: ClipboardEvent) {
+  if (isEditableTarget(e.target)) return
+  const all = filesFromClipboard(e.clipboardData)
+  if (!all.length) return
+  const pasted = all.filter(isSupportedImage)
+  if (!pasted.length) {
+    e.preventDefault()
+    message.warning('剪贴板里的图片格式不支持，仅支持 JPG / PNG / WebP')
+    return
+  }
+  if (uploading.value) {
+    message.info('正在上传，请等待完成后再粘贴')
+    return
+  }
+  e.preventDefault()
+  const stamp = clipTimestamp()
+  addFiles(pasted.map((file, i) => normalizePastedImage(file, i, stamp)))
+}
+
 function removeFile(index: number) {
   const [item] = files.value.splice(index, 1)
   URL.revokeObjectURL(item.thumb)
   if (!files.value.length) {
-    statusText.value = '选择或拖拽图片文件到上方区域'
+    statusText.value = '选择、拖拽或 Ctrl+V 粘贴图片到上方区域'
   }
 }
 
 function clearFiles() {
   for (const item of files.value) URL.revokeObjectURL(item.thumb)
   files.value = []
-  statusText.value = '选择或拖拽图片文件到上方区域'
+  statusText.value = '选择、拖拽或 Ctrl+V 粘贴图片到上方区域'
 }
 
 async function doUpload() {
@@ -335,7 +359,12 @@ function stopUploadPolling() {
   }
 }
 
+onMounted(() => {
+  window.addEventListener('paste', onPaste)
+})
+
 onUnmounted(() => {
+  window.removeEventListener('paste', onPaste)
   stopPolling()
   stopUploadPolling()
 })

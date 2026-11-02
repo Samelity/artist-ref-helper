@@ -15,8 +15,8 @@
       <div class="dz-icon">
         <AppIcon name="upload" :size="22" />
       </div>
-      <p class="dz-title">点击选择图片，或拖拽到此处</p>
-      <p class="dz-hint">支持 JPG / PNG / WebP</p>
+      <p class="dz-title">点击选择、拖拽，或按 Ctrl+V 粘贴</p>
+      <p class="dz-hint">支持 JPG / PNG / WebP，可直接粘贴截图</p>
     </template>
     <div v-else class="dz-preview">
       <img :src="previewUrl" alt="preview" />
@@ -30,8 +30,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import AppIcon from '@/components/common/AppIcon.vue'
+import { useLightboxStore } from '@/stores/lightbox'
+import { imagesFromPaste, isEditableTarget, isSupportedImage } from '@/utils/clipboard'
 
 const emit = defineEmits<{
   select: [file: File]
@@ -41,6 +43,7 @@ const fileInputRef = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const previewUrl = ref<string>('')
 const isDragging = ref(false)
+const lightbox = useLightboxStore()
 
 const hint = computed(() => (selectedFile.value ? selectedFile.value.name : '未选择文件'))
 
@@ -60,12 +63,29 @@ function onDrop(e: DragEvent) {
 }
 
 function pickFile(file: File) {
-  if (!file.type.startsWith('image/')) return
+  if (!isSupportedImage(file)) return
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   selectedFile.value = file
   previewUrl.value = URL.createObjectURL(file)
   emit('select', file)
 }
+
+function onPaste(e: ClipboardEvent) {
+  if (isEditableTarget(e.target) || lightbox.visible) return
+  const [file] = imagesFromPaste(e)
+  if (!file) return
+  e.preventDefault()
+  pickFile(file)
+}
+
+onMounted(() => {
+  window.addEventListener('paste', onPaste)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('paste', onPaste)
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+})
 
 defineExpose({
   reset() {

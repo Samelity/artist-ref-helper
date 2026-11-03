@@ -60,22 +60,50 @@
         <AppIcon name="refresh" :size="15" :class="{ spin: rebuilding }" />
         <span>{{ rebuilding ? '重建中…' : '重建索引' }}</span>
       </button>
-      <p class="hint">重新计算全部图片向量，图片较多时耗时较长。</p>
+      <div v-if="rebuilding" class="index-progress">
+        <div class="index-progress-info">
+          <span>{{ progressText }}</span>
+          <span v-if="status?.encoded">{{ status.encoded }} 张已编码</span>
+        </div>
+        <n-progress
+          type="line"
+          :percentage="percentage"
+          :show-indicator="false"
+          :height="4"
+          :status="status?.error ? 'error' : 'default'"
+        />
+      </div>
+      <p class="hint">重新计算全部图片向量，图片较多时耗时较长。重建期间可继续检索，上传/导入/删除会暂停。</p>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { useDialog, useMessage } from 'naive-ui'
+import { NProgress, useDialog, useMessage } from 'naive-ui'
 import AppIcon from '@/components/common/AppIcon.vue'
-import { rebuildIndex } from '@/api/images'
+import { getIndexStatus, rebuildIndex, type IndexRebuildStatus } from '@/api/images'
+
+const POLL_INTERVAL_MS = 1000
 
 const route = useRoute()
 const dialog = useDialog()
 const message = useMessage()
 const rebuilding = ref(false)
+const status = ref<IndexRebuildStatus | null>(null)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollInFlight = false
+
+const processed = computed(() => status.value?.processed ?? 0)
+const total = computed(() => status.value?.total ?? 0)
+const percentage = computed(() =>
+  total.value > 0 ? Math.min(100, Math.round((processed.value / total.value) * 100)) : 0,
+)
+const progressText = computed(() => {
+  if (!status.value || status.value.total <= 0) return '准备中…'
+  return `已处理 ${status.value.processed} / ${status.value.total}`
+})
 
 const searchTabs = [
   { to: '/text', name: 'text', label: '文搜图', icon: 'text' },
@@ -87,25 +115,99 @@ function handleRebuild() {
   if (rebuilding.value) return
   dialog.warning({
     title: '重建 CLIP 索引',
-    content: '将重新计算全部图片的向量并覆盖现有索引。图片较多时耗时较长，期间检索结果可能不完整。确定继续吗？',
+    content: '将重新计算全部图片的向量并覆盖现有索引。重建期间可继续检索，但上传、导入和删除会暂停。确定继续吗？',
     positiveText: '开始重建',
     negativeText: '取消',
     onPositiveClick: async () => {
       rebuilding.value = true
-      const tip = message.loading('索引重建中…', { duration: 0 })
       try {
         const data = await rebuildIndex()
-        message.success(`索引重建完成，共 ${data.indexedCount} 张`)
+        message.info(data.message || '索引重建已开始')
+        startPolling()
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e)
-        message.error('索引重建失败：' + msg)
-      } finally {
-        tip.destroy()
+        // 409 表示已有任务在跑，直接接管它的进度
+        const current = await getIndexStatus().catch(() => null)
+        if (current?.running) {
+          status.value = current
+          message.info('已有索引重建任务在运行，正在同步进度')
+          startPolling()
+          return
+        }
+        message.error('索引重建启动失败：' + errorText(e))
         rebuilding.value = false
       }
     },
   })
 }
+
+function startPolling() {
+  rebuilding.value = true
+  if (pollTimer) return
+  void poll()
+  pollTimer = setInterval(poll, POLL_INTERVAL_MS)
+}
+
+async function poll() {
+  if (pollInFlight) return
+  pollInFlight = true
+  try {
+    const next = await getIndexStatus()
+    status.value = next
+    if (next.running) {
+      rebuilding.value = true
+      return
+    }
+
+    stopPolling()
+    rebuilding.value = false
+
+    if (next.error) {
+      message.error('索引重建失败：' + next.error, { duration: 8000 })
+    } else {
+      const parts = [`索引重建完成，共 ${next.encoded} 张`]
+      if (next.skipped) parts.push(`跳过 ${next.skipped} 张`)
+      if (next.errors.length) parts.push(`${next.errors.length} 个文件读取失败`)
+      message.success(parts.join('，'), { duration: next.errors.length ? 6000 : 3000 })
+    }
+    notifyLibraryRefresh()
+  } catch {
+    // 网络瞬断不中断轮询，下次重试
+  } finally {
+    pollInFlight = false
+  }
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+function notifyLibraryRefresh() {
+  if (route.name === 'library') {
+    window.dispatchEvent(new CustomEvent('library:refresh'))
+  }
+}
+
+function errorText(e: unknown): string {
+  const data = (e as { response?: { data?: { detail?: string; error?: string } } })?.response?.data
+  if (data?.detail) return data.detail
+  if (data?.error) return data.error
+  return e instanceof Error ? e.message : String(e)
+}
+
+onMounted(async () => {
+  try {
+    const current = await getIndexStatus()
+    status.value = current
+    if (current.running) startPolling()
+  } catch {
+    // 首次探测失败不打扰用户，手动触发时会再暴露
+  }
+})
+
+onBeforeUnmount(stopPolling)
 </script>
 
 <style scoped>
@@ -251,6 +353,26 @@ function handleRebuild() {
   cursor: progress;
 }
 
+.index-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 2px;
+}
+
+.index-progress-info {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.index-progress-info span {
+  white-space: nowrap;
+}
+
 .hint {
   font-size: 11.5px;
   line-height: 1.5;
@@ -324,7 +446,8 @@ function handleRebuild() {
   }
 
   .nav-label,
-  .hint {
+  .hint,
+  .index-progress {
     display: none;
   }
 

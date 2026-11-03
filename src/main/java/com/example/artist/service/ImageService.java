@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -32,8 +33,8 @@ import java.util.stream.Collectors;
  * <p>
  * day5 关键改动：
  * 1. CLIP 只负责向量检索，返回 {id(FAISS行号), fileName, filePath, score}。
- * 2. 业务层用 FAISS 行号批量反查 reference_image 表（faiss_id BIGINT），
- * 以库中 file_name / file_path 为权威元数据；库里没有才用 CLIP 返回值兜底。
+ * 2. 业务层优先用 imageId（数据库主键）批量反查 reference_image，老响应才退回 FAISS 行号；
+ * 以库中 file_name / file_path 为权威元数据，库里没有才用 CLIP 返回值兜底。
  * 3. FAISS 行号在 Python 侧是字符串，库里是 BIGINT，统一在此处做 String -> Long 转换。
  */
 @Slf4j
@@ -41,15 +42,12 @@ import java.util.stream.Collectors;
 public class ImageService {
 
     private final WebClient clipWebClient;
-    private final WebClient indexWebClient;
     private final ImageRepository imageRepository;
 
     public ImageService(
             @Qualifier("clipWebClient") WebClient clipWebClient,
-            @Qualifier("indexWebClient") WebClient indexWebClient,
             ImageRepository imageRepository) {
         this.clipWebClient = clipWebClient;
-        this.indexWebClient = indexWebClient;
         this.imageRepository = imageRepository;
     }
 
@@ -66,19 +64,13 @@ public class ImageService {
     private long timeoutSeconds;
 
     /**
-     * 索引重建耗时较长，单独给更宽松的超时（秒）。
-     */
-    @Value("${image.search.index-timeout-seconds:300}")
-    private long indexTimeoutSeconds;
-
-    /**
      * 图库浏览每页展示的图片数量。
      */
     @Value("${image.browse.page-size}")
     private int browsePageSize;
 
     // ---------------------------------------------------------------------
-    // 对外接口（searchByText / searchByImage / indexLocalLibrary 同 _4，略）
+    // 对外接口（searchByText / searchByImage / triggerIndexRebuild 同 _4，略）
     // ---------------------------------------------------------------------
 
     public List<ImageEntity> searchByText(String query) {
@@ -156,28 +148,38 @@ public class ImageService {
         return toEntities(resp);
     }
 
+    /**
+     * 触发异步索引重建：Python 立即返回，实际编码在后台执行。
+     * 前端随后轮询 {@link #indexRebuildStatus()}。
+     */
     @SuppressWarnings("unchecked")
-    public int indexLocalLibrary() {
-        long start = System.currentTimeMillis();
+    public Map<String, Object> triggerIndexRebuild() {
         log.info("触发 CLIP 索引重建");
 
-        Map<String, Object> resp;
-        try {
-            resp = indexWebClient.post()
-                    .uri("/index")
-                    .retrieve()
-                    .onStatus(HttpStatusCode::isError, errorInterceptor("CLIP /index"))
-                    .bodyToMono(Map.class)
-                    .block(Duration.ofSeconds(indexTimeoutSeconds));
-        } catch (Exception e) {
-            log.error("索引重建失败", e);
-            throw e;
-        }
+        Map<String, Object> resp = clipWebClient.post()
+                .uri("/index")
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, errorInterceptor("CLIP /index"))
+                .bodyToMono(Map.class)
+                .block(Duration.ofSeconds(timeoutSeconds));
 
-        int count = extractIndexedCount(resp);
-        log.info("索引重建完成: indexedCount={}, 耗时={}ms",
-                count, System.currentTimeMillis() - start);
-        return count;
+        log.info("索引重建已受理: {}", resp);
+        return resp == null ? Map.of() : resp;
+    }
+
+    /**
+     * 透传 Python 的索引重建进度。
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> indexRebuildStatus() {
+        Map<String, Object> resp = clipWebClient.get()
+                .uri("/index/status")
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, errorInterceptor("CLIP /index/status"))
+                .bodyToMono(Map.class)
+                .block(Duration.ofSeconds(timeoutSeconds));
+
+        return resp == null ? Map.of() : resp;
     }
 
     /**
@@ -210,28 +212,15 @@ public class ImageService {
     private Function<ClientResponse, Mono<? extends Throwable>> errorInterceptor(String scene) {
         return response -> response.bodyToMono(String.class)
                 .defaultIfEmpty("")
-                .doOnNext(body -> log.error("{} 调用失败: status={}, body={}",
-                        scene, response.statusCode(), body))
-                .then(Mono.error(new IllegalStateException(
-                        scene + "服务调用失败: " + response.statusCode())));
-    }
-
-    private int extractIndexedCount(Map<String, Object> resp) {
-        if (resp == null) {
-            return 0;
-        }
-        Object raw = resp.get("indexedCount");
-        if (raw instanceof Number number) {
-            return number.intValue();
-        }
-        if (raw instanceof String str && !str.isBlank()) {
-            try {
-                return (int) Double.parseDouble(str.trim());
-            } catch (NumberFormatException ignore) {
-                return 0;
-            }
-        }
-        return 0;
+                .flatMap(body -> {
+                    log.error("{} 调用失败: status={}, body={}",
+                            scene, response.statusCode(), body);
+                    String message = scene + "服务调用失败: " + response.statusCode();
+                    if (!body.isBlank()) {
+                        message += " - " + body;
+                    }
+                    return Mono.error(new IllegalStateException(message));
+                });
     }
 
     private int sizeOf(ClipSearchResponse resp) {
@@ -239,24 +228,37 @@ public class ImageService {
     }
 
     /**
-     * 把 CLIP 返回的 {id(FAISS行号), fileName, filePath, score} 映射为业务实体。
-     * 关键：用 FAISS 行号（String -> Long）批量反查 reference_image，
-     * 库中元数据为准，查不到才用 CLIP 返回值兜底；保持 FAISS 返回的原始顺序。
+     * 把 CLIP 返回的结果映射为业务实体。
+     * 优先用 imageId（数据库主键）反查：重建/删除会压缩 FAISS 行号，
+     * 仅凭行号反查在切换窗口内可能拿到错误图片。老索引没有 imageId 时才退回按行号查。
+     * 库中元数据为准，查不到才用 CLIP 返回值兜底；保持 CLIP 返回的原始顺序。
      */
     private List<ImageEntity> toEntities(ClipSearchResponse resp) {
         if (resp == null || resp.items() == null || resp.items().isEmpty()) {
             return List.of();
         }
 
-        // 1. 把 FAISS 行号 String -> Long，跳过无法解析的脏数据
-        List<Long> faissIds = resp.items().stream()
-                .map(item -> parseFaissId(item.id()))
-                .filter(java.util.Objects::nonNull)
+        List<Long> imageIds = resp.items().stream()
+                .map(ClipSearchResponse.ClipItem::imageId)
+                .filter(Objects::nonNull)
                 .distinct()
                 .collect(Collectors.toList());
 
-        // 2. 批量反查 PostgreSQL（faiss_id 有唯一索引），放入 Map，重复保留先出现的
-        Map<Long, ImageEntity> entityMap = faissIds.isEmpty()
+        Map<Long, ImageEntity> entityById = imageIds.isEmpty()
+                ? Map.of()
+                : imageRepository.findAllById(imageIds).stream()
+                .collect(Collectors.toMap(
+                        ImageEntity::getId,
+                        Function.identity(),
+                        (existing, replacement) -> existing));
+
+        List<Long> faissIds = resp.items().stream()
+                .map(item -> parseFaissId(item.id()))
+                .filter(Objects::nonNull)
+                .distinct()
+                .collect(Collectors.toList());
+
+        Map<Long, ImageEntity> entityByFaissId = faissIds.isEmpty()
                 ? Map.of()
                 : imageRepository.findAllByFaissIdInAndFaissIdIsNotNull(faissIds).stream()
                 .collect(Collectors.toMap(
@@ -264,11 +266,12 @@ public class ImageService {
                         Function.identity(),
                         (existing, replacement) -> existing));
 
-        // 3. 按 FAISS 原始顺序组装：库里有记录则补全 fileName/filePath，否则用 CLIP 兜底
         List<ImageEntity> result = new ArrayList<>(resp.items().size());
         for (ClipSearchResponse.ClipItem item : resp.items()) {
             Long faissId = parseFaissId(item.id());
-            ImageEntity db = faissId == null ? null : entityMap.get(faissId);
+            ImageEntity db = item.imageId() != null
+                    ? entityById.get(item.imageId())
+                    : (faissId == null ? null : entityByFaissId.get(faissId));
 
             ImageEntity entity = db != null ? db : new ImageEntity();
             entity.setFaissId(faissId);          // 回填行号，便于前端再次定位

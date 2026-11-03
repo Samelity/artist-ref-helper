@@ -21,8 +21,27 @@ export async function searchByImage(file: File, topK?: number, threshold?: numbe
   return resp.data
 }
 
-export async function rebuildIndex(): Promise<{ indexedCount: number }> {
-  const resp = await javaHttp.post<{ indexedCount: number }>('/api/images/index')
+export interface IndexRebuildStatus {
+  running: boolean
+  processed: number
+  total: number
+  encoded: number
+  reused: number
+  skipped: number
+  errors: string[]
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+/** 触发异步索引重建；Python 立即返回，进度通过 getIndexStatus 轮询。 */
+export async function rebuildIndex(): Promise<{ accepted?: boolean; message?: string }> {
+  const resp = await javaHttp.post<{ accepted?: boolean; message?: string }>('/api/images/index')
+  return resp.data
+}
+
+export async function getIndexStatus(): Promise<IndexRebuildStatus> {
+  const resp = await javaHttp.get<IndexRebuildStatus>('/api/images/index/status')
   return resp.data
 }
 

@@ -187,7 +187,8 @@ artist-ref-helper/
 | GET | `/api/images/search/text` | 文搜图（参数：`query`, `topK`, `threshold`） |
 | POST | `/api/images/search/similar` | 图搜图（multipart 上传图片，`topK`, `threshold`） |
 | GET | `/api/images/browse` | 图库浏览（参数：`page`，每页 20 张，按 FAISS 行号倒序） |
-| POST | `/api/images/index` | 重建 FAISS 索引 |
+| POST | `/api/images/index` | 触发异步重建 FAISS 索引（立即返回 202） |
+| GET | `/api/images/index/status` | 索引重建进度（`running` / `processed` / `total` / `encoded` / `skipped` / `errors`） |
 | ALL | `/py/**` | 反向代理到 Python 服务（去掉 `/py` 前缀，流式转发；仅放行下方白名单） |
 
 `/py` 白名单：`/images/view`、`/images/delete`、`/pixabay/search`、`/pexels/search`、`/remote/save`、`/upload`、`/upload/status`、`/import`、`/import/status`，其余路径返回 404。
@@ -261,8 +262,7 @@ artist-ref-helper/
 | `clip.service.proxy-timeout-seconds` | `300` | `/py/**` 代理等待 Python 响应头的超时（批量上传时 CLIP 编码较慢，故放宽） |
 | `image.search.top-k` | `20` | 默认返回结果数 |
 | `image.search.threshold` | `0.2` | 相似度阈值 |
-| `image.search.timeout-seconds` | `30` | 搜索超时 |
-| `image.search.index-timeout-seconds` | `300` | 索引重建超时 |
+| `image.search.timeout-seconds` | `30` | 搜索与索引状态查询超时（重建本身已异步） |
 | `board.batch.max-images` | `500` | 单次批量加入灵感板的图片数量上限 |
 
 ## 打包与部署

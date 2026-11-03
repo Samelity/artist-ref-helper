@@ -69,7 +69,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onMounted, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onMounted, ref } from 'vue'
 import { NButton, useDialog, useMessage } from 'naive-ui'
 import PageHeader from '@/components/layout/PageHeader.vue'
 import StatusBar from '@/components/common/StatusBar.vue'
@@ -236,7 +236,18 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-onMounted(load)
+function onLibraryRefresh() {
+  if (!loading.value) load()
+}
+
+onMounted(() => {
+  window.addEventListener('library:refresh', onLibraryRefresh)
+  load()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('library:refresh', onLibraryRefresh)
+})
 
 let firstActivation = true
 onActivated(() => {

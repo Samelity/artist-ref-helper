@@ -62,12 +62,19 @@ public class ImageController {
     }
 
     /**
-     * 扫描并索引本地图库。
+     * 触发异步索引重建，立即返回 202；进度通过 GET /index/status 查询。
      */
     @PostMapping("/index")
     public ResponseEntity<Map<String, Object>> indexLibrary() {
         log.info("[HTTP] POST /index 触发索引重建");
-        int count = imageService.indexLocalLibrary();
-        return ResponseEntity.ok(Map.of("indexedCount", count));
+        return ResponseEntity.accepted().body(imageService.triggerIndexRebuild());
+    }
+
+    /**
+     * 索引重建进度（透传 Python 状态）。
+     */
+    @GetMapping("/index/status")
+    public Map<String, Object> indexStatus() {
+        return imageService.indexRebuildStatus();
     }
 }

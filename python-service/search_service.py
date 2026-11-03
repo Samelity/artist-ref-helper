@@ -1,11 +1,11 @@
 import asyncio
-import functools
 import json
 import os
 import re
 import shutil
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -85,16 +85,44 @@ logger.info("Image Service started successfully")
 # 行号一旦错位，Java 侧反查到的图片元数据就会张冠李戴。
 _index_mutation_lock = threading.RLock()
 
+# 检索只读：用短锁把 index 与 id_map 作为一个整体取快照，
+# 避免热替换的瞬间读到“新索引 + 旧行号映射”。
+_index_snapshot_lock = threading.Lock()
 
-def _serialized_index_mutation(func):
-    """把一次索引写操作包进全局锁；异步函数需自行用 to_thread 包装内部同步函数。"""
 
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        with _index_mutation_lock:
-            return func(*args, **kwargs)
+# 重建索引是长时间任务：请求立即返回，后台线程持 _index_mutation_lock 执行。
+# 期间上传/导入/网络保存/删除会快速返回 409，检索继续读旧的内存索引。
+MAX_REBUILD_ERRORS = 100
 
-    return wrapper
+_rebuild_state_lock = threading.Lock()
+_rebuild_state = {
+    "running": False,
+    "processed": 0,
+    "total": 0,
+    "encoded": 0,
+    "reused": 0,
+    "skipped": 0,
+    "errors": [],
+    "error": None,
+    "started_at": None,
+    "finished_at": None,
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _update_rebuild_state(**fields) -> None:
+    with _rebuild_state_lock:
+        _rebuild_state.update(fields)
+
+
+def _record_rebuild_error(message: str) -> None:
+    with _rebuild_state_lock:
+        if len(_rebuild_state["errors"]) < MAX_REBUILD_ERRORS:
+            _rebuild_state["errors"].append(message)
+
 
 # ---------- FastAPI ----------
 app = FastAPI(title="Reference Image Search")
@@ -107,7 +135,8 @@ class TextSearchRequest(BaseModel):
 
 
 class SearchResult(BaseModel):
-    id: str  # FAISS 行号（Java 反查用）
+    id: str  # FAISS 行号
+    imageId: int | None = None  # 数据库主键；重建/删除改行号时 Java 仍能反查到正确记录
     fileName: str
     filePath: str
     score: float
@@ -135,7 +164,8 @@ def _encode_image(image: Image.Image) -> np.ndarray:
 
 def _search(vector: np.ndarray, topK: int, threshold: float) -> SearchResponse:
     # 读取一次快照，避免删除/重建压缩行号时拿到新旧混杂的 index 与 id_map
-    idx, imap = index, id_map
+    with _index_snapshot_lock:
+        idx, imap = index, id_map
 
     # 索引为空（未建或被清空）时直接返回空结果，避免 NoneType 崩栈
     if idx is None or idx.ntotal == 0:
@@ -155,9 +185,10 @@ def _search(vector: np.ndarray, topK: int, threshold: float) -> SearchResponse:
             row = db.get_by_faiss_id(int(idx_row))
             if not row:
                 continue
-            meta = {"fileName": row["file_name"], "filePath": row["file_path"]}
+            meta = {"id": row["id"], "fileName": row["file_name"], "filePath": row["file_path"]}
         items.append(SearchResult(
             id=sid,
+            imageId=meta.get("id"),
             fileName=meta["fileName"],
             filePath=meta["filePath"],
             score=float(score),
@@ -200,85 +231,150 @@ def search_by_image(file: UploadFile = File(...),  # noqa: B008
     return resp
 
 
+def _reset_index() -> None:
+    """把内存与磁盘索引清空（PG 中没有可用图片时）。"""
+    global index, id_map
+    empty = faiss.IndexFlatIP(768)
+    with _index_snapshot_lock:
+        index = empty
+        id_map = {}
+    faiss.write_index(empty, INDEX_PATH)
+    with open(IDS_PATH, "w", encoding="utf-8") as f:
+        json.dump({}, f, ensure_ascii=False, indent=2)
+
+
 @app.post("/index")
-@_serialized_index_mutation
-def rebuild_index():
+def rebuild_index(bg: BackgroundTasks):
+    """
+    异步触发全量重建：立即返回，实际编码在后台线程执行。
+    前端通过 GET /index/status 轮询进度；重建期间写操作返回 409。
+    """
+    if _upload_progress["running"]:
+        raise HTTPException(status_code=409, detail="图片上传进行中，请稍后再重建索引")
+    if _import_progress["running"]:
+        raise HTTPException(status_code=409, detail="图片导入进行中，请稍后再重建索引")
+
+    with _rebuild_state_lock:
+        if _rebuild_state["running"]:
+            raise HTTPException(status_code=409, detail="索引重建正在进行中")
+        _rebuild_state.update(
+            running=True,
+            processed=0,
+            total=0,
+            encoded=0,
+            reused=0,
+            skipped=0,
+            errors=[],
+            error=None,
+            started_at=_now_iso(),
+            finished_at=None,
+        )
+
+    bg.add_task(_run_rebuild)
+    return {"accepted": True, "message": "索引重建已开始"}
+
+
+@app.get("/index/status")
+def index_rebuild_status():
+    """返回重建进度；running=False 时 finished_at / error 表示上次结果。"""
+    with _rebuild_state_lock:
+        return {
+            **_rebuild_state,
+            "errors": list(_rebuild_state["errors"]),
+        }
+
+
+def _run_rebuild() -> None:
     """
     以 PG 为唯一事实源重建 FAISS。
     自动处理 PG 与磁盘的不一致：缺失文件跳过并解绑 faiss_id，孤儿文件忽略。
     """
     global index, id_map
 
-    # 1. 从 PG 拉取全量记录（按 id 升序，决定 FAISS 行号）
-    records = db.list_all_ordered()
-    if not records:
-        logger.warning("PG 中无图片记录，清空索引")
-        index = None
-        id_map = {}
-        return {"indexedCount": 0, "skipped": 0, "unbound": 0}
+    try:
+        # 整个重建期间独占索引写锁：上传/导入/远程保存/删除会快速返回 409，
+        # 检索不拿写锁，继续使用旧索引与旧 id_map。
+        with _index_mutation_lock:
+            # 1. 从 PG 拉取全量记录（按 id 升序，决定 FAISS 行号）
+            records = db.list_all_ordered()
+            _update_rebuild_state(total=len(records))
+            if not records:
+                logger.warning("PG 中无图片记录，清空索引")
+                _reset_index()
+                return
 
-    # 2. 逐条编码，收集有效记录与缺失记录
-    vectors, valid_records, missing_ids = [], [], []
-    for rec in records:
-        try:
-            img = Image.open(resolve_storage_path(rec["file_path"]))
-            img.load()
-            vec = encode_one(model, preprocess, img, device)
-            vectors.append(vec)
-            valid_records.append(rec)
-        except FileNotFoundError:
-            missing_ids.append(rec["id"])
-            logger.warning(f"[自愈] 文件缺失，跳过并解绑: id={rec['id']} path={rec['file_path']}")
-        except Exception as e:  # noqa: BLE001
-            missing_ids.append(rec["id"])
-            logger.warning(f"[自愈] 文件损坏/读取失败，跳过并解绑: id={rec['id']} err={e}")
+            # 2. 逐条编码，收集有效记录与缺失记录
+            vectors, valid_records, missing_ids = [], [], []
+            for i, rec in enumerate(records):
+                try:
+                    img = Image.open(resolve_storage_path(rec["file_path"]))
+                    img.load()
+                    vec = encode_one(model, preprocess, img, device)
+                    vectors.append(vec)
+                    valid_records.append(rec)
+                except FileNotFoundError:
+                    missing_ids.append(rec["id"])
+                    msg = f"id={rec['id']} 文件缺失: {rec['file_path']}"
+                    logger.warning(f"[自愈] {msg}，跳过并解绑")
+                    _record_rebuild_error(msg)
+                except Exception as e:  # noqa: BLE001
+                    missing_ids.append(rec["id"])
+                    msg = f"id={rec['id']} 文件损坏/读取失败: {e}"
+                    logger.warning(f"[自愈] {msg}，跳过并解绑")
+                    _record_rebuild_error(msg)
+                finally:
+                    _update_rebuild_state(
+                        processed=i + 1,
+                        encoded=len(vectors),
+                        skipped=len(missing_ids),
+                    )
 
-    # 3. 将缺失文件的 faiss_id 置 NULL，避免 Java 侧用旧行号查到错误结果
-    unbound_count = 0
-    if missing_ids:
-        unbound_count = db.unbind_faiss_ids(missing_ids)
-        logger.info(f"[自愈] 已解绑 {unbound_count} 条缺失文件的 faiss_id")
+            # 3. 将缺失文件的 faiss_id 置 NULL，避免 Java 侧用旧行号查到错误结果
+            unbound_count = 0
+            if missing_ids:
+                unbound_count = db.unbind_faiss_ids(missing_ids)
+                logger.info(f"[自愈] 已解绑 {unbound_count} 条缺失文件的 faiss_id")
 
-    # 4. 无有效向量时清空索引
-    if not vectors:
-        logger.warning("所有文件均不可用，清空索引")
-        index = None
-        id_map = {}
-        return {"indexedCount": 0, "skipped": len(missing_ids), "unbound": unbound_count}
+            # 4. 无有效向量时清空索引
+            if not vectors:
+                logger.warning("所有文件均不可用，清空索引")
+                _reset_index()
+                return
 
-    # 5. 重建 FAISS（numpy 已在顶部导入，无需重复 import）
-    new_vectors = np.vstack(vectors)
-    new_index = faiss.IndexFlatIP(new_vectors.shape[1])
-    new_index.add(new_vectors)
-    faiss.write_index(new_index, INDEX_PATH)
+            # 5. 重建 FAISS
+            new_vectors = np.vstack(vectors)
+            new_index = faiss.IndexFlatIP(new_vectors.shape[1])
+            new_index.add(new_vectors)
 
-    # 6. 回填有效记录的新行号
-    pairs = [(row_idx, rec["id"]) for row_idx, rec in enumerate(valid_records)]
-    db.bind_faiss_ids(pairs)
+            pairs = [(row_idx, rec["id"]) for row_idx, rec in enumerate(valid_records)]
+            new_map = {
+                str(row_idx): {
+                    "id": rec["id"],
+                    "fileName": rec["file_name"],
+                    "filePath": rec["file_path"],
+                }
+                for row_idx, rec in enumerate(valid_records)
+            }
 
-    # 7. 更新内存 id_map（结构化兜底）
-    id_map = {
-        str(row_idx): {
-            "id": rec["id"],
-            "fileName": rec["file_name"],
-            "filePath": rec["file_path"],
-        }
-        for row_idx, rec in enumerate(valid_records)
-    }
-    with open(IDS_PATH, "w", encoding="utf-8") as f:
-        json.dump(id_map, f, ensure_ascii=False, indent=2)
+            # 6. 先落库，再写磁盘，最后热替换内存索引。
+            # 搜索响应同时带 imageId，因此 Java 在窗口期也不会按旧行号反查到错误图片。
+            db.bind_faiss_ids(pairs)
+            with open(IDS_PATH, "w", encoding="utf-8") as f:
+                json.dump(new_map, f, ensure_ascii=False, indent=2)
+            faiss.write_index(new_index, INDEX_PATH)
 
-    # 8. 热替换全局索引
-    index = new_index
-    logger.info(
-        f"Index rebuilt: total={new_index.ntotal}, "
-        f"skipped={len(missing_ids)}, unbound={unbound_count}"
-    )
-    return {
-        "indexedCount": new_index.ntotal,
-        "skipped": len(missing_ids),
-        "unbound": unbound_count,
-    }
+            with _index_snapshot_lock:
+                index = new_index
+                id_map = new_map
+            logger.info(
+                f"Index rebuilt: total={new_index.ntotal}, "
+                f"skipped={len(missing_ids)}, unbound={unbound_count}"
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("[rebuild] 索引重建失败")
+        _update_rebuild_state(error=str(e))
+    finally:
+        _update_rebuild_state(running=False, finished_at=_now_iso())
 
 
 def _is_allowed(abs_path: str) -> bool:
@@ -339,7 +435,10 @@ def delete_images(req: DeleteImagesRequest):
     if not ids:
         raise HTTPException(status_code=400, detail="请选择要删除的图片")
 
-    # 上传/导入/重建会长时间占用索引；短超时快速失败，避免浏览器干等
+    if _rebuild_state["running"]:
+        raise HTTPException(status_code=409, detail="索引重建进行中，请稍后再删除")
+
+    # 上传/导入会长时间占用索引；短超时快速失败，避免浏览器干等
     if not _index_mutation_lock.acquire(timeout=0.5):
         raise HTTPException(status_code=409, detail="图库正在上传、导入或重建索引，请稍后再删除")
     try:
@@ -438,8 +537,9 @@ def _compact_index_after_delete(removed_rows: set[int]) -> None:
     with open(IDS_PATH, "w", encoding="utf-8") as f:
         json.dump(new_map, f, ensure_ascii=False, indent=2)
 
-    index = new_index
-    id_map = new_map
+    with _index_snapshot_lock:
+        index = new_index
+        id_map = new_map
     logger.info(f"[delete] FAISS 行号压缩完成: {n} -> {new_index.ntotal}")
 
 
@@ -661,12 +761,22 @@ def _download_image(url: str, save_path: str, timeout: int = 30) -> None:
 
 
 @app.post("/remote/save", response_model=SaveResponse)
-@_serialized_index_mutation
 def remote_save(req: SaveRequest):
     """
     下载用户选中的远程图片（Pixabay / Pexels），CLIP 编码后增量追加到 FAISS 索引。
     已存在的 source_id 自动跳过，单张失败不影响其他图片。
     """
+    if _rebuild_state["running"]:
+        raise HTTPException(status_code=409, detail="索引重建进行中，请稍后再保存")
+    if not _index_mutation_lock.acquire(timeout=0.5):
+        raise HTTPException(status_code=409, detail="图库正在上传或导入，请稍后再试")
+    try:
+        return _remote_save_locked(req)
+    finally:
+        _index_mutation_lock.release()
+
+
+def _remote_save_locked(req: SaveRequest) -> SaveResponse:
     if index is None:
         raise HTTPException(status_code=500, detail="FAISS 索引未初始化，请先重建索引")
 
@@ -800,6 +910,8 @@ async def upload_images(files: list[UploadFile] = File(...), bg: BackgroundTasks
     with _upload_lock:
         if _upload_progress["running"]:
             raise HTTPException(status_code=409, detail="上传任务正在执行中")
+        if _rebuild_state["running"]:
+            raise HTTPException(status_code=409, detail="索引重建进行中，请稍后再上传")
 
     file_data: list[tuple[str, bytes]] = []
     for f in files:
@@ -823,9 +935,14 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
     """后台线程处理上传文件：保存 → CLIP 编码 → 入库 → 追加 FAISS。"""
     global index, id_map
 
-    @_serialized_index_mutation
     def _do_upload():
         global index, id_map
+
+        if not _index_mutation_lock.acquire(timeout=0.5):
+            with _upload_lock:
+                _upload_progress["errors"] = ["图库正在重建索引，请稍后重试"]
+                _upload_progress["running"] = False
+            return
 
         try:
             saved, skipped, errors = 0, 0, []
@@ -898,6 +1015,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
 
             logger.info(f"[upload] 完成: saved={saved} skipped={skipped} errors={len(errors)}")
         finally:
+            _index_mutation_lock.release()
             with _upload_lock:
                 _upload_progress["running"] = False
 
@@ -945,6 +1063,8 @@ def import_from_directory(bg: BackgroundTasks):
     with _import_lock:
         if _import_progress["running"]:
             raise HTTPException(status_code=409, detail="导入任务正在执行中")
+        if _rebuild_state["running"]:
+            raise HTTPException(status_code=409, detail="索引重建进行中，请稍后再导入")
 
     source_dir = Path(IMPORT_DIR)
     # 递归扫描所有子目录；用相对路径作为入库文件名，避免不同子目录中的同名文件互相覆盖
@@ -973,9 +1093,14 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
     """后台线程执行实际导入，逐文件更新进度。"""
     global index, id_map
 
-    @_serialized_index_mutation
     def _do_import():
         global index, id_map
+
+        if not _index_mutation_lock.acquire(timeout=0.5):
+            with _import_lock:
+                _import_progress["errors"] = ["图库正在重建索引，请稍后重试"]
+                _import_progress["running"] = False
+            return
 
         try:
             if index is None:
@@ -1046,6 +1171,7 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
 
             logger.info(f"[import] 完成: imported={imported} skipped={skipped} errors={len(errors)}")
         finally:
+            _index_mutation_lock.release()
             with _import_lock:
                 _import_progress["running"] = False
 

@@ -26,6 +26,17 @@ public class ClipConfig {
         return buildWebClient(baseUrl, connectTimeoutMs, readTimeoutMs);
     }
 
+    /**
+     * 相似图扫描专用 WebClient：图库较大时同步扫描会超过普通搜索的读超时。
+     */
+    @Bean
+    public WebClient duplicatesWebClient(
+            @Value("${clip.service.base-url}") String baseUrl,
+            @Value("${clip.service.connect-timeout-ms:3000}") int connectTimeoutMs,
+            @Value("${image.duplicates.timeout-seconds:300}") long scanTimeoutSeconds) {
+        return buildWebClient(baseUrl, connectTimeoutMs, (int) (scanTimeoutSeconds * 1000));
+    }
+
     private static WebClient buildWebClient(String baseUrl, int connectTimeoutMs, int readTimeoutMs) {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)

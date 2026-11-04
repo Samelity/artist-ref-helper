@@ -42,6 +42,14 @@
         <AppIcon name="upload" :size="18" />
         <span>导入图片</span>
       </router-link>
+      <router-link
+        to="/duplicates"
+        class="nav-item"
+        :class="{ active: route.name === 'duplicates' }"
+      >
+        <AppIcon name="duplicates" :size="18" />
+        <span>相似图</span>
+      </router-link>
 
       <p class="nav-label">收藏</p>
       <router-link

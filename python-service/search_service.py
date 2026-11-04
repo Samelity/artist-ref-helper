@@ -89,6 +89,12 @@ _index_mutation_lock = threading.RLock()
 # 避免热替换的瞬间读到“新索引 + 旧行号映射”。
 _index_snapshot_lock = threading.Lock()
 
+# 相似图扫描：直接复用已归一化的 CLIP 向量，不重新编码、不加载推理。
+# 结果按 (索引版本, 阈值) 缓存；任何写索引的操作都会累加版本号并清空缓存。
+_index_version = 0
+_duplicate_cache: dict[tuple[int, float], list] = {}
+_duplicates_scan_lock = threading.Lock()
+
 
 # 重建索引是长时间任务：请求立即返回，后台线程持 _index_mutation_lock 执行。
 # 期间上传/导入/网络保存/删除会快速返回 409，检索继续读旧的内存索引。
@@ -122,6 +128,13 @@ def _record_rebuild_error(message: str) -> None:
     with _rebuild_state_lock:
         if len(_rebuild_state["errors"]) < MAX_REBUILD_ERRORS:
             _rebuild_state["errors"].append(message)
+
+
+def _bump_index_version() -> None:
+    """索引内容变化后调用：累加版本号并清空相似图缓存。调用方需持写锁。"""
+    global _index_version
+    _index_version += 1
+    _duplicate_cache.clear()
 
 
 # ---------- FastAPI ----------
@@ -241,6 +254,7 @@ def _reset_index() -> None:
     faiss.write_index(empty, INDEX_PATH)
     with open(IDS_PATH, "w", encoding="utf-8") as f:
         json.dump({}, f, ensure_ascii=False, indent=2)
+    _bump_index_version()
 
 
 @app.post("/index")
@@ -366,6 +380,7 @@ def _run_rebuild() -> None:
             with _index_snapshot_lock:
                 index = new_index
                 id_map = new_map
+            _bump_index_version()
             logger.info(
                 f"Index rebuilt: total={new_index.ntotal}, "
                 f"skipped={len(missing_ids)}, unbound={unbound_count}"
@@ -440,7 +455,7 @@ def delete_images(req: DeleteImagesRequest):
 
     # 上传/导入会长时间占用索引；短超时快速失败，避免浏览器干等
     if not _index_mutation_lock.acquire(timeout=0.5):
-        raise HTTPException(status_code=409, detail="图库正在上传、导入或重建索引，请稍后再删除")
+        raise HTTPException(status_code=409, detail="图库正在上传、导入、重建索引或扫描相似图，请稍后再删除")
     try:
         return _delete_images_locked(ids)
     finally:
@@ -540,7 +555,183 @@ def _compact_index_after_delete(removed_rows: set[int]) -> None:
     with _index_snapshot_lock:
         index = new_index
         id_map = new_map
+    _bump_index_version()
     logger.info(f"[delete] FAISS 行号压缩完成: {n} -> {new_index.ntotal}")
+
+
+# ---------- 相似图扫描（仅分组，不删除）----------
+
+MIN_DUPLICATE_THRESHOLD = 0.90
+MAX_DUPLICATE_THRESHOLD = 0.999
+DUPLICATE_CACHE_SIZE = 8
+DUPLICATE_SCAN_CHUNK = 256
+
+
+class DuplicateMember(BaseModel):
+    imageId: int   # 数据库主键
+    faissId: int   # 快照中的 FAISS 行号
+    score: float   # 与组内最相似图片的余弦相似度
+
+
+class DuplicateGroup(BaseModel):
+    members: list[DuplicateMember]
+    minScore: float
+    maxScore: float
+
+
+class DuplicatesResponse(BaseModel):
+    threshold: float
+    scanned: int
+    groups: list[DuplicateGroup]
+    cached: bool
+    elapsedMs: int
+
+
+def _group_similar_vectors(
+        vectors: np.ndarray, row_to_db: np.ndarray, threshold: float,
+) -> list[DuplicateGroup]:
+    """对归一化向量做分块内积，按阈值连边后用并查集分组。"""
+    n = int(vectors.shape[0])
+    if n < 2:
+        return []
+
+    parent = list(range(n))
+    rank = [0] * n
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+
+    # 每个点只记录“与组内最相似邻点”的分数，供前端展示
+    best_scores: dict[int, float] = {}
+    cols = np.arange(n)
+    for start in range(0, n, DUPLICATE_SCAN_CHUNK):
+        end = min(start + DUPLICATE_SCAN_CHUNK, n)
+        # 向量已 L2 归一化，内积即余弦相似度
+        sims = vectors[start:end] @ vectors.T
+        rows = np.arange(start, end)
+        mask = sims >= threshold
+        # 只保留上三角，避免重复边；对角线是自身，不计入
+        mask &= cols[None, :] > rows[:, None]
+        i_idx, j_idx = np.nonzero(mask)
+        for i_local, j in zip(i_idx.tolist(), j_idx.tolist()):
+            i = start + i_local
+            score = float(sims[i_local, j])
+            union(i, j)
+            if score > best_scores.get(i, -1.0):
+                best_scores[i] = score
+            if score > best_scores.get(j, -1.0):
+                best_scores[j] = score
+
+    grouped: dict[int, list[int]] = {}
+    for row in best_scores:
+        grouped.setdefault(find(row), []).append(row)
+
+    groups: list[DuplicateGroup] = []
+    for rows_in_group in grouped.values():
+        members: list[DuplicateMember] = []
+        for row in rows_in_group:
+            db_id = int(row_to_db[row])
+            if db_id < 0:
+                # 索引里有向量但数据库没有绑定（极端不一致），跳过
+                continue
+            members.append(DuplicateMember(
+                imageId=db_id,
+                faissId=row,
+                score=best_scores[row],
+            ))
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda m: m.imageId)
+        scores = [m.score for m in members]
+        groups.append(DuplicateGroup(
+            members=members,
+            minScore=min(scores),
+            maxScore=max(scores),
+        ))
+
+    # 组越大、相似度越高越先看
+    groups.sort(key=lambda g: (len(g.members), g.maxScore), reverse=True)
+    return groups
+
+
+@app.get("/duplicates/scan", response_model=DuplicatesResponse)
+def scan_duplicates(threshold: float = 0.98):
+    """
+    扫描 CLIP 向量中的高相似图片并分组。
+    只返回候选组，绝不删除；实际保留/删除由人工在前端确认。
+    """
+    if not MIN_DUPLICATE_THRESHOLD <= threshold <= MAX_DUPLICATE_THRESHOLD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"相似度阈值需在 {MIN_DUPLICATE_THRESHOLD} 到 {MAX_DUPLICATE_THRESHOLD} 之间",
+        )
+    if _rebuild_state["running"]:
+        raise HTTPException(status_code=409, detail="索引重建进行中，请稍后再扫描")
+    if not _duplicates_scan_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="相似图扫描正在进行中，请稍候")
+
+    try:
+        t0 = time.time()
+
+        # 短暂独占写锁：复制向量与行号映射后立即释放，计算期间不阻塞上传/删除。
+        # 若计算期间索引变化，版本号会变，缓存结果自然失效。
+        if not _index_mutation_lock.acquire(timeout=0.5):
+            raise HTTPException(status_code=409, detail="图库正在上传或导入，请稍后再扫描")
+        try:
+            n = 0 if index is None else index.ntotal
+            version = _index_version
+            if n:
+                vectors = np.ascontiguousarray(index.reconstruct_n(0, n), dtype=np.float32)
+                row_to_db = np.full(n, -1, dtype=np.int64)
+                for row in db.list_faiss_bindings():
+                    fid = row["faiss_id"]
+                    if fid is not None and 0 <= fid < n:
+                        row_to_db[int(fid)] = int(row["id"])
+            else:
+                vectors = np.empty((0, 0), dtype=np.float32)
+                row_to_db = np.empty(0, dtype=np.int64)
+        finally:
+            _index_mutation_lock.release()
+
+        key = (version, round(float(threshold), 4))
+        cached_groups = _duplicate_cache.get(key)
+        if cached_groups is not None:
+            groups = cached_groups
+            cached = True
+        else:
+            groups = _group_similar_vectors(vectors, row_to_db, float(threshold))
+            if len(_duplicate_cache) >= DUPLICATE_CACHE_SIZE:
+                _duplicate_cache.clear()
+            _duplicate_cache[key] = groups
+            cached = False
+
+        elapsed_ms = int((time.time() - t0) * 1000)
+        logger.info(
+            f"[duplicates] scanned={n} threshold={threshold} groups={len(groups)} "
+            f"cached={cached} elapsed={elapsed_ms}ms"
+        )
+        return DuplicatesResponse(
+            threshold=float(threshold),
+            scanned=n,
+            groups=groups,
+            cached=cached,
+            elapsedMs=elapsed_ms,
+        )
+    finally:
+        _duplicates_scan_lock.release()
 
 
 # ---------- 网络搜图：通用模型 ----------
@@ -769,7 +960,7 @@ def remote_save(req: SaveRequest):
     if _rebuild_state["running"]:
         raise HTTPException(status_code=409, detail="索引重建进行中，请稍后再保存")
     if not _index_mutation_lock.acquire(timeout=0.5):
-        raise HTTPException(status_code=409, detail="图库正在上传或导入，请稍后再试")
+        raise HTTPException(status_code=409, detail="图库正在上传、导入或扫描相似图，请稍后再试")
     try:
         return _remote_save_locked(req)
     finally:
@@ -851,6 +1042,8 @@ def _remote_save_locked(req: SaveRequest) -> SaveResponse:
     faiss.write_index(index, INDEX_PATH)
     with open(IDS_PATH, "w", encoding="utf-8") as f:
         json.dump(id_map, f, ensure_ascii=False, indent=2)
+    if saved > 0:
+        _bump_index_version()
 
     logger.info(f"[remote] save 完成: saved={saved} skipped={skipped} errors={len(errors)}")
     return SaveResponse(saved=saved, skipped=skipped, errors=errors)
@@ -940,7 +1133,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
 
         if not _index_mutation_lock.acquire(timeout=0.5):
             with _upload_lock:
-                _upload_progress["errors"] = ["图库正在重建索引，请稍后重试"]
+                _upload_progress["errors"] = ["图库正在重建索引或扫描相似图，请稍后重试"]
                 _upload_progress["running"] = False
             return
 
@@ -1012,6 +1205,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                 faiss.write_index(index, INDEX_PATH)
                 with open(IDS_PATH, "w", encoding="utf-8") as f:
                     json.dump(id_map, f, ensure_ascii=False, indent=2)
+                _bump_index_version()
 
             logger.info(f"[upload] 完成: saved={saved} skipped={skipped} errors={len(errors)}")
         finally:
@@ -1098,7 +1292,7 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
 
         if not _index_mutation_lock.acquire(timeout=0.5):
             with _import_lock:
-                _import_progress["errors"] = ["图库正在重建索引，请稍后重试"]
+                _import_progress["errors"] = ["图库正在重建索引或扫描相似图，请稍后重试"]
                 _import_progress["running"] = False
             return
 
@@ -1168,6 +1362,7 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
                 faiss.write_index(index, INDEX_PATH)
                 with open(IDS_PATH, "w", encoding="utf-8") as f:
                     json.dump(id_map, f, ensure_ascii=False, indent=2)
+                _bump_index_version()
 
             logger.info(f"[import] 完成: imported={imported} skipped={skipped} errors={len(errors)}")
         finally:

@@ -1,5 +1,6 @@
 package com.example.artist.controller;
 
+import com.example.artist.dto.DuplicateReviewResponse;
 import com.example.artist.dto.ImagePageResponse;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.service.ImageService;
@@ -76,5 +77,14 @@ public class ImageController {
     @GetMapping("/index/status")
     public Map<String, Object> indexStatus() {
         return imageService.indexRebuildStatus();
+    }
+
+    /**
+     * 扫描视觉相似的图片分组，供人工审查保留/删除。
+     */
+    @GetMapping("/duplicates")
+    public DuplicateReviewResponse duplicates(@RequestParam(required = false) Double threshold) {
+        log.info("[HTTP] GET /duplicates threshold={}", threshold);
+        return imageService.findDuplicates(threshold);
     }
 }

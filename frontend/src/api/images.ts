@@ -61,3 +61,44 @@ export async function deleteImages(ids: number[]): Promise<DeleteImagesResult> {
   const resp = await pythonHttp.post<DeleteImagesResult>('/images/delete', { ids })
   return resp.data
 }
+
+export interface DuplicateImage {
+  id: number
+  faissId: number | null
+  fileName: string | null
+  filePath: string | null
+  source?: string | null
+  sourceId?: string | null
+  sourceUrl?: string | null
+  photographer?: string | null
+  createdAt?: string | null
+  /** 与组内最相似图片的余弦相似度 */
+  score: number
+}
+
+export interface DuplicateGroup {
+  images: DuplicateImage[]
+  suggestedKeepId: number | null
+  minScore: number
+  maxScore: number
+}
+
+export interface DuplicateScanResult {
+  threshold: number
+  scanned: number
+  cached: boolean
+  elapsedMs: number
+  totalGroups: number
+  totalImages: number
+  groups: DuplicateGroup[]
+}
+
+/** 扫描视觉相似图片；同步接口，图库较大时耗时较久。 */
+export async function scanDuplicates(threshold?: number): Promise<DuplicateScanResult> {
+  // 需大于后端 image.duplicates.timeout-seconds（默认 300s），避免浏览器先超时
+  const resp = await javaHttp.get<DuplicateScanResult>('/api/images/duplicates', {
+    params: { threshold },
+    timeout: 320000,
+  })
+  return resp.data
+}

@@ -1,6 +1,8 @@
 package com.example.artist.service;
 
 import com.example.artist.dto.ClipSearchResponse;
+import com.example.artist.dto.DuplicateReviewResponse;
+import com.example.artist.dto.DuplicateScanResponse;
 import com.example.artist.dto.ImagePageResponse;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.repository.ImageRepository;
@@ -22,9 +24,11 @@ import reactor.core.publisher.Mono;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -42,12 +46,15 @@ import java.util.stream.Collectors;
 public class ImageService {
 
     private final WebClient clipWebClient;
+    private final WebClient duplicatesWebClient;
     private final ImageRepository imageRepository;
 
     public ImageService(
             @Qualifier("clipWebClient") WebClient clipWebClient,
+            @Qualifier("duplicatesWebClient") WebClient duplicatesWebClient,
             ImageRepository imageRepository) {
         this.clipWebClient = clipWebClient;
+        this.duplicatesWebClient = duplicatesWebClient;
         this.imageRepository = imageRepository;
     }
 
@@ -68,6 +75,22 @@ public class ImageService {
      */
     @Value("${image.browse.page-size}")
     private int browsePageSize;
+
+    /**
+     * 相似图扫描默认阈值与超时。
+     */
+    @Value("${image.duplicates.threshold:0.98}")
+    private double duplicateThreshold;
+
+    @Value("${image.duplicates.timeout-seconds:300}")
+    private long duplicateTimeoutSeconds;
+
+    /**
+     * 建议保留项：有来源元数据的副本优先，其次最早入库（id 最小）。
+     */
+    private static final Comparator<ImageEntity> KEEP_PRIORITY = Comparator
+            .comparing((ImageEntity entity) -> !hasSourceMeta(entity))
+            .thenComparing(ImageEntity::getId);
 
     // ---------------------------------------------------------------------
     // 对外接口（searchByText / searchByImage / triggerIndexRebuild 同 _4，略）
@@ -183,6 +206,83 @@ public class ImageService {
     }
 
     /**
+     * 扫描视觉相似图片并分组。只返回候选，是否保留/删除由人工决定。
+     */
+    public DuplicateReviewResponse findDuplicates(Double requestedThreshold) {
+        double threshold = requestedThreshold == null ? duplicateThreshold : requestedThreshold;
+        if (threshold < 0.90 || threshold > 0.999) {
+            throw new IllegalArgumentException("相似度阈值需在 0.90 到 0.999 之间");
+        }
+
+        long start = System.currentTimeMillis();
+        log.info("相似图扫描: threshold={}", threshold);
+
+        DuplicateScanResponse resp = duplicatesWebClient.get()
+                .uri("/duplicates/scan?threshold={threshold}", threshold)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, errorInterceptor("相似图扫描"))
+                .bodyToMono(DuplicateScanResponse.class)
+                .block(Duration.ofSeconds(duplicateTimeoutSeconds));
+
+        if (resp == null) {
+            return new DuplicateReviewResponse(
+                    threshold, 0, false, System.currentTimeMillis() - start, 0, 0, List.of());
+        }
+
+        Set<Long> imageIds = resp.groups() == null ? Set.of() : resp.groups().stream()
+                .flatMap(group -> group.members().stream())
+                .map(DuplicateScanResponse.Member::imageId)
+                .collect(Collectors.toSet());
+        Map<Long, ImageEntity> entityById = imageIds.isEmpty()
+                ? Map.of()
+                : imageRepository.findAllById(imageIds).stream()
+                .collect(Collectors.toMap(
+                        ImageEntity::getId,
+                        Function.identity(),
+                        (existing, replacement) -> existing));
+
+        List<DuplicateReviewResponse.Group> groups = new ArrayList<>();
+        int totalImages = 0;
+        if (resp.groups() != null) {
+            for (DuplicateScanResponse.Group raw : resp.groups()) {
+                List<ImageEntity> images = new ArrayList<>();
+                for (DuplicateScanResponse.Member member : raw.members()) {
+                    ImageEntity entity = entityById.get(member.imageId());
+                    if (entity == null) {
+                        continue;   // 扫描期间被删除
+                    }
+                    entity.setScore(member.score());
+                    images.add(entity);
+                }
+                if (images.size() < 2) {
+                    continue;
+                }
+                images.sort(Comparator.comparing(ImageEntity::getId));
+                Long keepId = images.stream()
+                        .min(KEEP_PRIORITY)
+                        .map(ImageEntity::getId)
+                        .orElse(null);
+                groups.add(new DuplicateReviewResponse.Group(
+                        images, keepId, raw.minScore(), raw.maxScore()));
+                totalImages += images.size();
+            }
+        }
+
+        groups.sort(Comparator
+                .comparingInt((DuplicateReviewResponse.Group group) -> group.images().size())
+                .reversed()
+                .thenComparing(Comparator.comparingDouble(
+                        DuplicateReviewResponse.Group::maxScore).reversed()));
+
+        log.info("相似图扫描完成: scanned={}, groups={}, images={}, cached={}, 耗时={}ms",
+                resp.scanned(), groups.size(), totalImages, resp.cached(),
+                System.currentTimeMillis() - start);
+        return new DuplicateReviewResponse(
+                resp.threshold(), resp.scanned(), resp.cached(), resp.elapsedMs(),
+                groups.size(), totalImages, groups);
+    }
+
+    /**
      * 分页浏览图库全部图片，按 FAISS 行号倒序（最新入库在前）。
      * 页码越界时回落到最后一页，前端因此总能拿到有效数据。
      */
@@ -225,6 +325,16 @@ public class ImageService {
 
     private int sizeOf(ClipSearchResponse resp) {
         return resp == null || resp.items() == null ? 0 : resp.items().size();
+    }
+
+    private static boolean hasSourceMeta(ImageEntity entity) {
+        return !isBlank(entity.getSourceUrl())
+                || !isBlank(entity.getSourceId())
+                || !isBlank(entity.getPhotographer());
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     /**

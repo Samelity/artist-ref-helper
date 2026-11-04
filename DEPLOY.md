@@ -470,10 +470,11 @@ docker compose logs -f --tail=100 app python
 | 4 | 点击图片缩略图 | 大图能正常加载（走 `/py/images/view`） |
 | 5 | 文搜图 / 图搜图 | 返回结果，缩略图正常 |
 | 6 | 「重建索引」 | 侧边栏显示进度，完成后提示数量与图库一致；重建期间上传/导入/删除提示稍后再试 |
-| 7 | 重启容器：`docker compose restart` | 图片、索引、数据库记录都还在 |
-| 8 | 局域网另一台电脑访问 `http://<IP>:8080` | 能打开页面并使用 |
-| 9 | 局域网访问 `http://<IP>:8000` | 无法访问（符合预期，Python 未发布端口） |
-| 10 | `docker compose ps` | app 为 `running`，python 为 `healthy`，postgres 为 `healthy` |
+| 7 | 「相似图」页选择阈值并扫描 | 按组展示相似图片、组内相似度和「建议保留」标记；删除所选后提示成功，图库数量相应减少 |
+| 8 | 重启容器：`docker compose restart` | 图片、索引、数据库记录都还在 |
+| 9 | 局域网另一台电脑访问 `http://<IP>:8080` | 能打开页面并使用 |
+| 10 | 局域网访问 `http://<IP>:8000` | 无法访问（符合预期，Python 未发布端口） |
+| 11 | `docker compose ps` | app 为 `running`，python 为 `healthy`，postgres 为 `healthy` |
 
 ---
 

@@ -189,6 +189,7 @@ artist-ref-helper/
 | GET | `/api/images/browse` | 图库浏览（参数：`page`，每页 20 张，按 FAISS 行号倒序） |
 | POST | `/api/images/index` | 触发异步重建 FAISS 索引（立即返回 202） |
 | GET | `/api/images/index/status` | 索引重建进度（`running` / `processed` / `total` / `encoded` / `skipped` / `errors`） |
+| GET | `/api/images/duplicates` | 相似图扫描（参数：`threshold`，默认 0.98）；返回候选分组，仅供人工审查，不自动删除 |
 | ALL | `/py/**` | 反向代理到 Python 服务（去掉 `/py` 前缀，流式转发；仅放行下方白名单） |
 
 `/py` 白名单：`/images/view`、`/images/delete`、`/pixabay/search`、`/pexels/search`、`/remote/save`、`/upload`、`/upload/status`、`/import`、`/import/status`，其余路径返回 404。
@@ -263,6 +264,8 @@ artist-ref-helper/
 | `image.search.top-k` | `20` | 默认返回结果数 |
 | `image.search.threshold` | `0.2` | 相似度阈值 |
 | `image.search.timeout-seconds` | `30` | 搜索与索引状态查询超时（重建本身已异步） |
+| `image.duplicates.threshold` | `0.98` | 相似图扫描默认阈值（允许 0.90–0.999） |
+| `image.duplicates.timeout-seconds` | `300` | 相似图同步扫描超时，图库较大时需放宽 |
 | `board.batch.max-images` | `500` | 单次批量加入灵感板的图片数量上限 |
 
 ## 打包与部署

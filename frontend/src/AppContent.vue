@@ -1,7 +1,7 @@
 <template>
   <div class="shell">
     <AppSidebar />
-    <main class="main">
+    <main class="main" :class="{ 'main-flush': flushLayout }">
       <div class="main-inner">
         <router-view v-slot="{ Component }">
           <keep-alive>
@@ -15,8 +15,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import ImageLightbox from './components/common/ImageLightbox.vue'
+
+const route = useRoute()
+const flushLayout = computed(() => route.meta.flushLayout === true)
 </script>
 
 <style scoped>
@@ -29,6 +34,15 @@ import ImageLightbox from './components/common/ImageLightbox.vue'
 .main {
   min-width: 0;
   padding: 32px 36px 64px;
+}
+
+.main.main-flush {
+  padding: 0;
+}
+
+.main-flush .main-inner {
+  max-width: none;
+  margin: 0;
 }
 
 .main-inner {

@@ -10,8 +10,8 @@
 | 图搜图 | 上传、拖入或 Ctrl+V 粘贴一张图片，检索风格/内容相似的参考图 |
 | 网络搜图 | 从 Pixabay / Pexels 搜索远程图片，一键保存到本地并自动建立索引 |
 | 图库浏览 | 分页浏览本地图库全部图片（每页 20 张），按入库顺序倒序，最新图片在前 |
-| 批量选择 | 图库、文搜图、图搜图页均提供「批量选择」模式，勾选多张后一次性加入同一个灵感板 |
-| 灵感板 | 创建画板、收集图片，用于归纳和整理参考图；板内图片按加入时间倒序（最新收藏在最前），名称和描述可随时修改，移除图片前会二次确认 |
+| 批量选择 | 图库、文搜图、图搜图页均提供「批量选择」模式，勾选多张后一次性加入同一个灵感板；灵感板内同样支持批量选择与逐张预览，可跨页累计选择（全选本页 / 全选本板），也可把所选图片批量移出当前板（不影响图库和其他板） |
+| 灵感板 | 创建画板、收集图片，用于归纳和整理参考图；板内图片可直接拖到左侧任意灵感板完成二次归类（两边都保留该图），板内图片按加入时间倒序（最新收藏在最前）并分页展示（每页 20 张），名称和描述可随时修改，移除图片前会二次确认 |
 | 批量导入 | 浏览器多选、拖拽或 Ctrl+V 粘贴上传，或把图片放进局域网共享目录（含子文件夹，自动递归）后一键导入；两者都有实时进度，内容重复的图片自动跳过 |
 
 ## 技术架构
@@ -198,16 +198,17 @@ artist-ref-helper/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/boards` | 创建灵感板 |
-| GET | `/api/boards` | 获取所有灵感板 |
+| POST | `/api/boards` | 创建灵感板，返回摘要 |
+| GET | `/api/boards` | 获取所有灵感板摘要（含 `imageCount`，不含图片明细） |
 | GET | `/api/boards/{boardId}` | 获取灵感板详情（含图片，按加入时间倒序） |
-| PUT | `/api/boards/{boardId}` | 更新灵感板（名称、描述） |
+| PUT | `/api/boards/{boardId}` | 更新灵感板（名称、描述），返回摘要 |
 | DELETE | `/api/boards/{boardId}` | 删除灵感板 |
-| POST | `/api/boards/{boardId}/images/{imageId}` | 添加单张图片到灵感板 |
-| POST | `/api/boards/{boardId}/images/batch` | 批量添加图片到灵感板 |
-| DELETE | `/api/boards/{boardId}/images/{imageId}` | 从灵感板移除图片 |
+| POST | `/api/boards/{boardId}/images/{imageId}` | 添加单张图片到灵感板，返回摘要 |
+| POST | `/api/boards/{boardId}/images/batch` | 批量添加图片到灵感板，返回摘要与计数 |
+| DELETE | `/api/boards/{boardId}/images/{imageId}` | 从灵感板移除图片，返回摘要 |
+| POST | `/api/boards/{boardId}/images/remove-batch` | 批量移出图片，返回摘要与移除数量 |
 
-批量添加请求体为 `{"imageIds": [1, 2, 3]}`，返回 `{"board": {...}, "added": 2, "skipped": 1}`；已在灵感板中的图片会计入 `skipped`，单次上限由 `board.batch.max-images` 控制（默认 500）。
+批量添加请求体为 `{"imageIds": [1, 2, 3]}`，返回 `{"board": {..., "imageCount": 10}, "added": 2, "skipped": 1}`；已在灵感板中的图片会计入 `skipped`，单次上限由 `board.batch.max-images` 控制（默认 2000）。批量移出使用同样的请求体，返回 `{"board": {..., "imageCount": 8}, "removed": 2}`，只解除图片与当前板的关联，不影响图库和其他灵感板。
 
 ### 批量导入（浏览器经 `/py/**` 访问）
 
@@ -266,7 +267,7 @@ artist-ref-helper/
 | `image.search.timeout-seconds` | `30` | 搜索与索引状态查询超时（重建本身已异步） |
 | `image.duplicates.threshold` | `0.98` | 相似图扫描默认阈值（允许 0.90–0.999） |
 | `image.duplicates.timeout-seconds` | `300` | 相似图同步扫描超时，图库较大时需放宽 |
-| `board.batch.max-images` | `500` | 单次批量加入灵感板的图片数量上限 |
+| `board.batch.max-images` | `2000` | 单次批量加入灵感板的图片数量上限 |
 
 ## 打包与部署
 

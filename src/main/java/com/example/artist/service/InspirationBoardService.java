@@ -1,22 +1,22 @@
 package com.example.artist.service;
 
 import com.example.artist.dto.BoardBatchAddResponse;
+import com.example.artist.dto.BoardBatchRemoveResponse;
 import com.example.artist.dto.BoardResponse;
+import com.example.artist.dto.BoardSummaryResponse;
 import com.example.artist.model.BoardEntity;
 import com.example.artist.model.BoardImageEntity;
 import com.example.artist.model.ImageEntity;
 import com.example.artist.repository.BoardImageRepository;
 import com.example.artist.repository.BoardRepository;
 import com.example.artist.repository.ImageRepository;
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -34,9 +34,6 @@ public class InspirationBoardService {
     private final ImageRepository imageRepository;
     private final int maxBatchImages;
 
-    @PersistenceContext
-    private EntityManager entityManager;
-
     public InspirationBoardService(
             BoardRepository boardRepository,
             BoardImageRepository boardImageRepository,
@@ -49,23 +46,23 @@ public class InspirationBoardService {
     }
 
     @Transactional
-    public BoardResponse create(BoardEntity board) {
+    public BoardSummaryResponse create(BoardEntity board) {
         BoardEntity saved = boardRepository.save(board);
-        return toResponse(saved, List.of());
+        return toSummary(saved, 0);
     }
 
-    public List<BoardResponse> listBoards() {
+    public List<BoardSummaryResponse> listBoards() {
         List<BoardEntity> boards = boardRepository.findAllOrdered();
         if (boards.isEmpty()) {
             return List.of();
         }
         List<Long> boardIds = boards.stream().map(BoardEntity::getId).toList();
-        Map<Long, List<BoardImageEntity>> itemsByBoard = new LinkedHashMap<>();
-        for (BoardImageEntity item : boardImageRepository.findOrderedByBoardIds(boardIds)) {
-            itemsByBoard.computeIfAbsent(item.getBoardId(), key -> new ArrayList<>()).add(item);
+        Map<Long, Integer> counts = new HashMap<>();
+        for (BoardImageRepository.BoardImageCount row : boardImageRepository.countByBoardIds(boardIds)) {
+            counts.put(row.getBoardId(), Math.toIntExact(row.getImageCount()));
         }
         return boards.stream()
-                .map(board -> toResponse(board, itemsByBoard.getOrDefault(board.getId(), List.of())))
+                .map(board -> toSummary(board, counts.getOrDefault(board.getId(), 0)))
                 .toList();
     }
 
@@ -75,7 +72,7 @@ public class InspirationBoardService {
     }
 
     @Transactional
-    public BoardResponse updateBoard(Long boardId, String name, String description) {
+    public BoardSummaryResponse updateBoard(Long boardId, String name, String description) {
         BoardEntity board = requireBoard(boardId);
         if (name != null) {
             board.setName(name);
@@ -84,7 +81,7 @@ public class InspirationBoardService {
             board.setDescription(description);
         }
         BoardEntity saved = boardRepository.save(board);
-        return toResponse(saved, boardImageRepository.findOrderedByBoardId(boardId));
+        return toSummary(saved, Math.toIntExact(boardImageRepository.countByBoardId(boardId)));
     }
 
     @Transactional
@@ -97,7 +94,7 @@ public class InspirationBoardService {
     }
 
     @Transactional
-    public BoardResponse addImageToBoard(Long boardId, Long imageId) {
+    public BoardSummaryResponse addImageToBoard(Long boardId, Long imageId) {
         return addImagesToBoard(boardId, List.of(imageId)).board();
     }
 
@@ -131,31 +128,61 @@ public class InspirationBoardService {
         }
         if (!toAdd.isEmpty()) {
             boardImageRepository.saveAll(toAdd);
-            // 先落库再把新实例摘出持久化上下文：否则下面的查询会直接复用这些实例
-            // （image 未加载），而不是从库里重新取 JOIN FETCH 的结果，toResponse 会拿到 null
-            entityManager.flush();
-            toAdd.forEach(entityManager::detach);
         }
 
         int added = toAdd.size();
         int skipped = uniqueIds.size() - added;
         log.info("Batch add to board {}: requested={}, added={}, skipped={}",
                 boardId, uniqueIds.size(), added, skipped);
-        return new BoardBatchAddResponse(
-                toResponse(board, boardImageRepository.findOrderedByBoardId(boardId)), added, skipped);
+        return new BoardBatchAddResponse(toSummary(board, existingIds.size()), added, skipped);
     }
 
     @Transactional
-    public BoardResponse removeImageFromBoard(Long boardId, Long imageId) {
+    public BoardSummaryResponse removeImageFromBoard(Long boardId, Long imageId) {
         BoardEntity board = requireBoard(boardId);
         boardImageRepository.deleteByBoardIdAndImageId(boardId, imageId);
         log.info("Removed image {} from board {}", imageId, boardId);
-        return toResponse(board, boardImageRepository.findOrderedByBoardId(boardId));
+        return toSummary(board, Math.toIntExact(boardImageRepository.countByBoardId(boardId)));
+    }
+
+    @Transactional
+    public BoardBatchRemoveResponse removeImagesFromBoard(Long boardId, List<Long> imageIds) {
+        if (imageIds == null || imageIds.isEmpty()) {
+            throw new IllegalArgumentException("请至少选择一张图片");
+        }
+
+        Set<Long> uniqueIds = new LinkedHashSet<>();
+        for (Long imageId : imageIds) {
+            if (imageId != null) {
+                uniqueIds.add(imageId);
+            }
+        }
+        if (uniqueIds.isEmpty()) {
+            throw new IllegalArgumentException("请至少选择一张图片");
+        }
+
+        BoardEntity board = requireBoard(boardId);
+        int removed = boardImageRepository.deleteByBoardIdAndImageIdIn(boardId, uniqueIds);
+        log.info("Batch remove from board {}: requested={}, removed={}",
+                boardId, uniqueIds.size(), removed);
+        return new BoardBatchRemoveResponse(
+                toSummary(board, Math.toIntExact(boardImageRepository.countByBoardId(boardId))),
+                removed);
     }
 
     private BoardEntity requireBoard(Long boardId) {
         return boardRepository.findById(boardId)
                 .orElseThrow(() -> new IllegalArgumentException("Board not found: " + boardId));
+    }
+
+    private BoardSummaryResponse toSummary(BoardEntity board, int imageCount) {
+        return new BoardSummaryResponse(
+                board.getId(),
+                board.getName(),
+                board.getDescription(),
+                board.getCreatedAt(),
+                imageCount
+        );
     }
 
     private BoardResponse toResponse(BoardEntity board, List<BoardImageEntity> items) {
@@ -178,7 +205,8 @@ public class InspirationBoardService {
                 board.getName(),
                 board.getDescription(),
                 imageResponses,
-                board.getCreatedAt()
+                board.getCreatedAt(),
+                imageResponses.size()
         );
     }
 }

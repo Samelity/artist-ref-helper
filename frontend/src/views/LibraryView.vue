@@ -256,7 +256,6 @@ onActivated(() => {
     return
   }
   // 从导入页返回时图库可能已变化，刷新当前页
-  exitSelection()
   load()
 })
 </script>

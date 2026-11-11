@@ -1,8 +1,15 @@
 import { javaHttp } from './http'
-import type { BatchAddResult, Board, BoardCreate, BoardUpdate } from '@/types/board'
+import type {
+  BatchAddResult,
+  BatchRemoveResult,
+  Board,
+  BoardCreate,
+  BoardSummary,
+  BoardUpdate,
+} from '@/types/board'
 
-export async function listBoards(): Promise<Board[]> {
-  const resp = await javaHttp.get<Board[]>('/api/boards')
+export async function listBoards(): Promise<BoardSummary[]> {
+  const resp = await javaHttp.get<BoardSummary[]>('/api/boards')
   return resp.data
 }
 
@@ -11,13 +18,13 @@ export async function getBoard(id: number): Promise<Board> {
   return resp.data
 }
 
-export async function createBoard(data: BoardCreate): Promise<Board> {
-  const resp = await javaHttp.post<Board>('/api/boards', data)
+export async function createBoard(data: BoardCreate): Promise<BoardSummary> {
+  const resp = await javaHttp.post<BoardSummary>('/api/boards', data)
   return resp.data
 }
 
-export async function updateBoard(id: number, data: BoardUpdate): Promise<Board> {
-  const resp = await javaHttp.put<Board>(`/api/boards/${id}`, data)
+export async function updateBoard(id: number, data: BoardUpdate): Promise<BoardSummary> {
+  const resp = await javaHttp.put<BoardSummary>(`/api/boards/${id}`, data)
   return resp.data
 }
 
@@ -35,7 +42,21 @@ export async function addImagesToBoard(
   return resp.data
 }
 
-export async function removeImageFromBoard(boardId: number, imageId: number): Promise<Board> {
-  const resp = await javaHttp.delete<Board>(`/api/boards/${boardId}/images/${imageId}`)
+export async function removeImageFromBoard(
+  boardId: number,
+  imageId: number,
+): Promise<BoardSummary> {
+  const resp = await javaHttp.delete<BoardSummary>(`/api/boards/${boardId}/images/${imageId}`)
+  return resp.data
+}
+
+export async function removeImagesFromBoard(
+  boardId: number,
+  imageIds: number[],
+): Promise<BatchRemoveResult> {
+  const resp = await javaHttp.post<BatchRemoveResult>(
+    `/api/boards/${boardId}/images/remove-batch`,
+    { imageIds },
+  )
   return resp.data
 }

@@ -16,6 +16,12 @@ import java.util.Set;
  */
 public interface BoardImageRepository extends JpaRepository<BoardImageEntity, BoardImageId> {
 
+    interface BoardImageCount {
+        Long getBoardId();
+
+        long getImageCount();
+    }
+
     @Query("""
             SELECT bi FROM BoardImageEntity bi JOIN FETCH bi.image
             WHERE bi.boardId = :boardId
@@ -24,11 +30,15 @@ public interface BoardImageRepository extends JpaRepository<BoardImageEntity, Bo
     List<BoardImageEntity> findOrderedByBoardId(@Param("boardId") Long boardId);
 
     @Query("""
-            SELECT bi FROM BoardImageEntity bi JOIN FETCH bi.image
+            SELECT bi.boardId AS boardId, COUNT(bi) AS imageCount
+            FROM BoardImageEntity bi
             WHERE bi.boardId IN :boardIds
-            ORDER BY bi.boardId, bi.addedAt DESC, bi.imageId DESC
+            GROUP BY bi.boardId
             """)
-    List<BoardImageEntity> findOrderedByBoardIds(@Param("boardIds") Collection<Long> boardIds);
+    List<BoardImageCount> countByBoardIds(@Param("boardIds") Collection<Long> boardIds);
+
+    @Query("SELECT COUNT(bi) FROM BoardImageEntity bi WHERE bi.boardId = :boardId")
+    long countByBoardId(@Param("boardId") Long boardId);
 
     @Query("SELECT bi.imageId FROM BoardImageEntity bi WHERE bi.boardId = :boardId")
     Set<Long> findImageIdsByBoardId(@Param("boardId") Long boardId);
@@ -36,6 +46,11 @@ public interface BoardImageRepository extends JpaRepository<BoardImageEntity, Bo
     @Modifying
     @Query("DELETE FROM BoardImageEntity bi WHERE bi.boardId = :boardId AND bi.imageId = :imageId")
     void deleteByBoardIdAndImageId(@Param("boardId") Long boardId, @Param("imageId") Long imageId);
+
+    @Modifying
+    @Query("DELETE FROM BoardImageEntity bi WHERE bi.boardId = :boardId AND bi.imageId IN :imageIds")
+    int deleteByBoardIdAndImageIdIn(@Param("boardId") Long boardId,
+                                    @Param("imageIds") Collection<Long> imageIds);
 
     @Modifying
     @Query("DELETE FROM BoardImageEntity bi WHERE bi.boardId = :boardId")

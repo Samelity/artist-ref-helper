@@ -3,18 +3,18 @@
     <div v-if="visible" ref="pickerRef" class="board-picker" :style="posStyle">
       <p class="picker-title">
         <span>
-          添加到灵感板
+          {{ title }}
           <span v-if="imageIds.length > 1" class="picker-count">· {{ imageIds.length }} 张</span>
         </span>
         <span v-if="submitting" class="picker-submitting">添加中…</span>
       </p>
       <div v-if="loading" class="picker-row muted">加载中…</div>
-      <div v-else-if="!store.boards.length" class="picker-row muted">
-        暂无灵感板，先创建再添加
+      <div v-else-if="!availableBoards.length" class="picker-row muted">
+        暂无可用的灵感板，先创建一个
       </div>
       <template v-else>
         <button
-          v-for="board in store.boards"
+          v-for="board in availableBoards"
           :key="board.id"
           type="button"
           class="picker-row picker-item"
@@ -22,7 +22,7 @@
           @click="add(board.id)"
         >
           <span class="item-name">{{ board.name }}</span>
-          <span class="item-count">{{ (board.images || []).length }}</span>
+          <span class="item-count">{{ board.imageCount }}</span>
         </button>
       </template>
       <button type="button" class="picker-new" @click="goToBoards">
@@ -41,10 +41,15 @@ import AppIcon from '@/components/common/AppIcon.vue'
 import { useBoardsStore } from '@/stores/boards'
 import type { BatchAddResult } from '@/types/board'
 
-const props = defineProps<{
-  imageIds: number[]
-  anchor: { left: number; top: number }
-}>()
+const props = withDefaults(
+  defineProps<{
+    imageIds: number[]
+    anchor: { left: number; top: number }
+    excludeBoardId?: number
+    title?: string
+  }>(),
+  { excludeBoardId: undefined, title: '添加到灵感板' },
+)
 
 const emit = defineEmits<{
   close: []
@@ -60,6 +65,10 @@ const loading = ref(false)
 const submitting = ref(false)
 const pickerRef = ref<HTMLElement | null>(null)
 const pos = ref({ left: props.anchor.left, top: props.anchor.top })
+
+const availableBoards = computed(() =>
+  store.boards.filter((board) => board.id !== props.excludeBoardId),
+)
 
 const posStyle = computed(() => ({ left: `${pos.value.left}px`, top: `${pos.value.top}px` }))
 

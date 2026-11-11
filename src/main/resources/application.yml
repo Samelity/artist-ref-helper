@@ -31,6 +31,8 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+          batch_size: 100            # 批量加入灵感板时合并 INSERT，减少数据库往返
+        order_inserts: true
   servlet:
     multipart:
       max-file-size: 50MB
@@ -50,7 +52,7 @@ clip:
 # 灵感板
 board:
   batch:
-    max-images: 500                # 单次批量加入灵感板的图片上限
+    max-images: 2000               # 单次批量加入灵感板的图片上限
 
 # 本地图库
 image:

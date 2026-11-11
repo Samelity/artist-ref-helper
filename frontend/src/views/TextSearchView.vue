@@ -100,7 +100,7 @@ import type { ImageItem } from '@/types/image'
 
 defineOptions({ name: 'TextSearchView' })
 
-const query = ref('雨夜街道、霓虹灯')
+const query = ref('')
 const topK = ref(12)
 const threshold = ref(0.2)
 const loading = ref(false)

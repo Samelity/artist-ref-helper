@@ -1,7 +1,7 @@
 package com.example.artist.dto;
 
 public record BoardBatchAddResponse(
-        BoardResponse board,
+        BoardSummaryResponse board,
         int added,
         int skipped
 ) {

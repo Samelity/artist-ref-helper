@@ -1,10 +1,14 @@
 import type { ImageItem } from './image'
 
-export interface Board {
+export interface BoardSummary {
   id: number
   name: string
   description: string | null
   createdAt: string | null
+  imageCount: number
+}
+
+export interface Board extends BoardSummary {
   images: ImageItem[]
 }
 
@@ -19,7 +23,12 @@ export interface BoardUpdate {
 }
 
 export interface BatchAddResult {
-  board: Board
+  board: BoardSummary
   added: number
   skipped: number
+}
+
+export interface BatchRemoveResult {
+  board: BoardSummary
+  removed: number
 }

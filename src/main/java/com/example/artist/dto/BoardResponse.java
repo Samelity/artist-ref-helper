@@ -8,7 +8,8 @@ public record BoardResponse(
         String name,
         String description,
         List<BoardImageResponse> images,
-        OffsetDateTime createdAt
+        OffsetDateTime createdAt,
+        int imageCount
 ) {
     public record BoardImageResponse(
             Long id,

@@ -2,7 +2,10 @@ package com.example.artist.controller;
 
 import com.example.artist.dto.BoardBatchAddRequest;
 import com.example.artist.dto.BoardBatchAddResponse;
+import com.example.artist.dto.BoardBatchRemoveRequest;
+import com.example.artist.dto.BoardBatchRemoveResponse;
 import com.example.artist.dto.BoardResponse;
+import com.example.artist.dto.BoardSummaryResponse;
 import com.example.artist.model.BoardEntity;
 import com.example.artist.service.InspirationBoardService;
 import lombok.RequiredArgsConstructor;
@@ -23,12 +26,12 @@ public class BoardController {
     private final InspirationBoardService boardService;
 
     @PostMapping
-    public ResponseEntity<BoardResponse> create(@RequestBody BoardEntity board) {
+    public ResponseEntity<BoardSummaryResponse> create(@RequestBody BoardEntity board) {
         return ResponseEntity.ok(boardService.create(board));
     }
 
     @GetMapping
-    public ResponseEntity<List<BoardResponse>> list() {
+    public ResponseEntity<List<BoardSummaryResponse>> list() {
         return ResponseEntity.ok(boardService.listBoards());
     }
 
@@ -38,8 +41,8 @@ public class BoardController {
     }
 
     @PutMapping("/{boardId}")
-    public ResponseEntity<BoardResponse> update(@PathVariable Long boardId,
-                                                 @RequestBody Map<String, String> body) {
+    public ResponseEntity<BoardSummaryResponse> update(@PathVariable Long boardId,
+                                                        @RequestBody Map<String, String> body) {
         return ResponseEntity.ok(boardService.updateBoard(
                 boardId, body.get("name"), body.get("description")));
     }
@@ -51,8 +54,8 @@ public class BoardController {
     }
 
     @PostMapping("/{boardId}/images/{imageId}")
-    public ResponseEntity<BoardResponse> addImage(@PathVariable Long boardId,
-                                                   @PathVariable Long imageId) {
+    public ResponseEntity<BoardSummaryResponse> addImage(@PathVariable Long boardId,
+                                                          @PathVariable Long imageId) {
         return ResponseEntity.ok(boardService.addImageToBoard(boardId, imageId));
     }
 
@@ -64,8 +67,15 @@ public class BoardController {
     }
 
     @DeleteMapping("/{boardId}/images/{imageId}")
-    public ResponseEntity<BoardResponse> removeImage(@PathVariable Long boardId,
-                                                      @PathVariable Long imageId) {
+    public ResponseEntity<BoardSummaryResponse> removeImage(@PathVariable Long boardId,
+                                                             @PathVariable Long imageId) {
         return ResponseEntity.ok(boardService.removeImageFromBoard(boardId, imageId));
+    }
+
+    @PostMapping("/{boardId}/images/remove-batch")
+    public ResponseEntity<BoardBatchRemoveResponse> removeImages(
+            @PathVariable Long boardId,
+            @RequestBody BoardBatchRemoveRequest request) {
+        return ResponseEntity.ok(boardService.removeImagesFromBoard(boardId, request.imageIds()));
     }
 }

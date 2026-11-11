@@ -307,3 +307,4 @@ java -jar target/artist-ref-helper-0.1.0-SNAPSHOT.jar
 - **Chinese-CLIP ViT-L/14**：中英双语 CLIP 模型，支持跨语言图文语义匹配
 - **FAISS IndexFlatIP**：基于内积（余弦相似度）的平铺向量索引，由 Python 服务管理
 - **增量索引**：网络导入的新图片自动编码并追加到 FAISS，无需全量重建
+- **内容去重**：入库前算 SHA-256，`reference_image.content_hash` 上的部分唯一索引（`WHERE content_hash IS NOT NULL`，由 Spring Boot 启动时创建）兜住并发入库；撞索引即按「已存在」跳过，并清掉本次写入的文件。同图不同尺寸/压缩仍按设计视为不同条目

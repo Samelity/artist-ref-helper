@@ -386,6 +386,16 @@ docker compose exec postgres psql -U artist -d artist_ref -c "\dt"
 
 应能看到 `reference_image`、`boards`、`board_images` 等表。
 
+`app` 启动时还会补建一个 Hibernate 表达不了的部分唯一索引，作为内容哈希去重的数据库级保证：
+
+```powershell
+docker compose exec postgres psql -U artist -d artist_ref -c "\di ux_reference_image_content_hash"
+```
+
+> 如果库里已有内容哈希重复的存量图片，索引建不起来，`app` 日志会输出
+> `content_hash 存在 N 组重复，唯一索引未创建`。应用照常运行，去重退回「先查后插」；
+> 用「相似图」页或清理脚本去掉重复后重启 `app` 即可生效。
+
 > 注意：
 > - Python 侧**不会建表**，表由 Spring Boot 的 `ddl-auto: update` 创建。空库第一次必须先让 `app` 启动一次。
 > - PostgreSQL 的初始化变量只在 `pgdata` 卷为空时生效。以后修改 `.env` 里的 `DB_NAME` 不会自动新建库，改 `DB_PASSWORD` 也不会改已有用户的密码，需要手动 `CREATE DATABASE` / `ALTER USER`，或者删卷重来（会丢数据）。

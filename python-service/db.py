@@ -11,6 +11,9 @@ DB_NAME = os.environ.get("DB_NAME", "postgres")
 
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
+# 由 Java SchemaInitializer 启动时创建；Python 靠索引名区分「内容重复」与其他唯一冲突
+CONTENT_HASH_INDEX = "ux_reference_image_content_hash"
+
 
 def connect():
     """返回一个 autocommit 的连接，row 用 dict 方便按列名取值。"""
@@ -24,15 +27,29 @@ def query_one(sql, params=None):
         return cur.fetchone()
 
 
-def insert_image(file_name: str, file_path: str, content_hash: str | None = None) -> int:
-    """插入一条图片元数据，返回自增主键 id。file_path 为相对 STORAGE_DIR 的路径。"""
+def _insert_image(sql: str, params: tuple) -> int | None:
+    """执行插入并返回自增 id；撞 content_hash 唯一索引时返回 None，表示内容已被并发入库。"""
+    with connect() as conn, conn.cursor() as cur:
+        try:
+            cur.execute(sql, params)
+            return cur.fetchone()["id"]
+        except psycopg.errors.UniqueViolation as e:
+            # 只认内容哈希索引：其他唯一约束（如 faiss_id）冲突仍属异常，必须抛出
+            if e.diag.constraint_name != CONTENT_HASH_INDEX:
+                raise
+            return None
+
+
+def insert_image(file_name: str, file_path: str, content_hash: str | None = None) -> int | None:
+    """插入一条图片元数据，返回自增主键 id；内容哈希重复时返回 None。
+
+    file_path 为相对 STORAGE_DIR 的路径。
+    """
     sql = (
         "INSERT INTO reference_image (file_name, file_path, content_hash) "
         "VALUES (%s, %s, %s) RETURNING id"
     )
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute(sql, (file_name, file_path, content_hash))
-        return cur.fetchone()["id"]
+    return _insert_image(sql, (file_name, file_path, content_hash))
 
 
 def list_all_ordered():
@@ -136,19 +153,20 @@ def insert_image_with_source(
     source_url: str | None = None,
     photographer: str | None = None,
     content_hash: str | None = None,
-) -> int:
-    """插入一条带来源信息的图片记录，返回自增主键 id。file_path 为相对 STORAGE_DIR 的路径。"""
+) -> int | None:
+    """插入一条带来源信息的图片记录，返回自增主键 id；内容哈希重复时返回 None。
+
+    file_path 为相对 STORAGE_DIR 的路径。
+    """
     sql = (
         "INSERT INTO reference_image "
         "(file_name, file_path, source, source_id, source_url, photographer, content_hash) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id"
     )
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            sql,
-            (file_name, file_path, source, source_id, source_url, photographer, content_hash),
-        )
-        return cur.fetchone()["id"]
+    return _insert_image(
+        sql,
+        (file_name, file_path, source, source_id, source_url, photographer, content_hash),
+    )
 
 
 def exists_by_hash(content_hash: str) -> int | None:

@@ -518,6 +518,17 @@ def _remove_image_files(rows: list[dict], errors: list[str]) -> None:
             logger.warning(f"[delete] 删除文件失败: {abs_path}: {e}")
 
 
+def _discard_new_file(abs_path: str, label: str) -> None:
+    """删掉本次刚写入、但入库时发现内容已存在的文件，避免留下孤儿文件。
+
+    路径由本次入库生成且未被任何记录引用，无需白名单与共享引用检查。
+    """
+    try:
+        os.remove(abs_path)
+    except OSError:
+        logger.warning(f"{label} 删除重复文件失败: {abs_path}")
+
+
 def _compact_index_after_delete(removed_rows: set[int]) -> None:
     """移除指定 FAISS 行并压缩行号，同步更新 PG 绑定、id_map 与磁盘索引文件。"""
     global index, id_map
@@ -995,10 +1006,7 @@ def _remote_save_locked(req: SaveRequest) -> SaveResponse:
             content_hash = sha256_file(abs_path)
             existing_id = db.exists_by_hash(content_hash)
             if existing_id is not None:
-                try:
-                    os.remove(abs_path)
-                except OSError:
-                    logger.warning(f"[remote] 删除重复下载文件失败: {abs_path}")
+                _discard_new_file(abs_path, "[remote]")
                 skipped += 1
                 logger.info(f"[remote] 跳过重复内容: {photo.id} (已存在 id={existing_id})")
                 continue
@@ -1016,6 +1024,12 @@ def _remote_save_locked(req: SaveRequest) -> SaveResponse:
                 photographer=photo.photographer,
                 content_hash=content_hash,
             )
+            if db_id is None:
+                # 唯一索引拦下了并发入库：文件已下载但没有记录，必须清掉且不能写 FAISS
+                _discard_new_file(abs_path, "[remote]")
+                skipped += 1
+                logger.info(f"[remote] 跳过重复内容: {photo.id} (并发入库被唯一索引拦截)")
+                continue
 
             index.add(vec)
             faiss_id = next_faiss_id
@@ -1178,6 +1192,15 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                     db_id = db.insert_image(
                         file_name=file_name, file_path=file_name, content_hash=content_hash,
                     )
+                    if db_id is None:
+                        # 唯一索引拦下了并发入库：清掉刚写的文件，按重复跳过，不写 FAISS
+                        _discard_new_file(abs_path, "[upload]")
+                        skipped += 1
+                        with _upload_lock:
+                            _upload_progress["skipped"] = skipped
+                            _record_skipped(_upload_progress, original_name)
+                        logger.info(f"[upload] 跳过重复内容: {original_name} (并发入库被唯一索引拦截)")
+                        continue
 
                     index.add(vec)
                     faiss_id = next_faiss_id
@@ -1335,6 +1358,16 @@ async def _run_import(source_dir: Path, relative_files: list[Path]):
                     db_id = db.insert_image(
                         file_name=file_name, file_path=file_name, content_hash=content_hash,
                     )
+                    if db_id is None:
+                        # 唯一索引拦下了并发入库：清掉刚拷贝的文件，按重复跳过，不写 FAISS
+                        _discard_new_file(abs_path, "[import]")
+                        skipped += 1
+                        with _import_lock:
+                            _import_progress["skipped"] = skipped
+                            # file_name 此时已是落盘用的去重名，进度里仍报导入目录中的原名
+                            _record_skipped(_import_progress, rel.as_posix())
+                        logger.info(f"[import] 跳过重复内容: {rel.as_posix()} (并发入库被唯一索引拦截)")
+                        continue
 
                     index.add(vec)
                     faiss_id = next_faiss_id

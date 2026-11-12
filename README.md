@@ -265,7 +265,7 @@ artist-ref-helper/
 | `image.search.top-k` | `20` | 默认返回结果数 |
 | `image.search.threshold` | `0.2` | 相似度阈值 |
 | `image.search.timeout-seconds` | `30` | 搜索与索引状态查询超时（重建本身已异步） |
-| `image.duplicates.threshold` | `0.98` | 相似图扫描默认阈值（允许 0.90–0.999） |
+| `image.duplicates.threshold` | `0.98` | 相似图扫描默认阈值（允许 0.90–1.0，1.0 表示完全相同） |
 | `image.duplicates.timeout-seconds` | `300` | 相似图同步扫描超时，图库较大时需放宽 |
 | `board.batch.max-images` | `2000` | 单次批量加入灵感板的图片数量上限 |
 

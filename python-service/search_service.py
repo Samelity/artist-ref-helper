@@ -573,7 +573,9 @@ def _compact_index_after_delete(removed_rows: set[int]) -> None:
 # ---------- 相似图扫描（仅分组，不删除）----------
 
 MIN_DUPLICATE_THRESHOLD = 0.90
-MAX_DUPLICATE_THRESHOLD = 0.999
+MAX_DUPLICATE_THRESHOLD = 1.0
+# float32 内积计算自身相似度时结果可能略低于 1.0（BLAS 舍入），100% 档位需留微小容差
+DUPLICATE_SCORE_EPSILON = 1e-5
 DUPLICATE_CACHE_SIZE = 8
 DUPLICATE_SCAN_CHUNK = 256
 
@@ -633,7 +635,8 @@ def _group_similar_vectors(
         # 向量已 L2 归一化，内积即余弦相似度
         sims = vectors[start:end] @ vectors.T
         rows = np.arange(start, end)
-        mask = sims >= threshold
+        cutoff = threshold - DUPLICATE_SCORE_EPSILON if threshold >= 1.0 else threshold
+        mask = sims >= cutoff
         # 只保留上三角，避免重复边；对角线是自身，不计入
         mask &= cols[None, :] > rows[:, None]
         i_idx, j_idx = np.nonzero(mask)

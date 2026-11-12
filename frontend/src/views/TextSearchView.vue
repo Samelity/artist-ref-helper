@@ -46,7 +46,7 @@
 
       <div class="params">
         <span class="params-label">检索参数</span>
-        <TopKThreshold :default-top-k="12" :default-threshold="0.2" @update="onParamsUpdate" />
+        <TopKThreshold :default-top-k="20" :default-threshold="0.2" @update="onParamsUpdate" />
       </div>
     </div>
 
@@ -101,7 +101,7 @@ import type { ImageItem } from '@/types/image'
 defineOptions({ name: 'TextSearchView' })
 
 const query = ref('')
-const topK = ref(12)
+const topK = ref(20)
 const threshold = ref(0.2)
 const loading = ref(false)
 const searched = ref(false)

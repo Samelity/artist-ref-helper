@@ -210,8 +210,8 @@ public class ImageService {
      */
     public DuplicateReviewResponse findDuplicates(Double requestedThreshold) {
         double threshold = requestedThreshold == null ? duplicateThreshold : requestedThreshold;
-        if (threshold < 0.90 || threshold > 0.999) {
-            throw new IllegalArgumentException("相似度阈值需在 0.90 到 0.999 之间");
+        if (threshold < 0.90 || threshold > 1.0) {
+            throw new IllegalArgumentException("相似度阈值需在 0.90 到 1.0 之间");
         }
 
         long start = System.currentTimeMillis();

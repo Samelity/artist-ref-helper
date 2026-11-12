@@ -154,6 +154,7 @@ const lightbox = useLightboxStore()
 
 const threshold = ref(0.98)
 const thresholdOptions = [
+  { label: '1.0 · 完全相同', value: 1 },
   { label: '0.995 · 极严格', value: 0.995 },
   { label: '0.99 · 严格', value: 0.99 },
   { label: '0.98 · 推荐', value: 0.98 },

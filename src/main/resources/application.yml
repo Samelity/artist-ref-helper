@@ -64,7 +64,7 @@ image:
     timeout-seconds: 30            # 搜索与索引状态接口超时（重建本身已改为异步）
   # 相似图人工审查：只做候选分组，不自动删除
   duplicates:
-    threshold: 0.98                # 余弦相似度阈值（0.90–0.999）
+    threshold: 0.98                # 余弦相似度阈值（0.90–1.0，1.0 表示完全相同）
     timeout-seconds: 300           # 同步扫描超时，图库较大时需放宽
 
 # 网络搜图 API Key 由 Python 服务通过环境变量读取：

@@ -19,7 +19,7 @@
       <div class="panel-footer">
         <div class="params">
           <span class="params-label">检索参数</span>
-          <TopKThreshold :default-top-k="12" :default-threshold="0.2" @update="onParamsUpdate" />
+          <TopKThreshold :default-top-k="20" :default-threshold="0.2" @update="onParamsUpdate" />
         </div>
         <n-button type="primary" :loading="loading" :disabled="!selectedFile" @click="search">
           开始检索
@@ -79,7 +79,7 @@ defineOptions({ name: 'ImageSearchView' })
 
 const dropzoneRef = ref<InstanceType<typeof ImageDropzone> | null>(null)
 const selectedFile = ref<File | null>(null)
-const topK = ref(12)
+const topK = ref(20)
 const threshold = ref(0.2)
 const loading = ref(false)
 const searched = ref(false)

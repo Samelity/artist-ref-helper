@@ -36,7 +36,7 @@ const props = withDefaults(
     defaultThreshold?: number
   }>(),
   {
-    defaultTopK: 12,
+    defaultTopK: 20,
     defaultThreshold: 0.2,
   },
 )

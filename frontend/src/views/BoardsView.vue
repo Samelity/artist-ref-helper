@@ -7,7 +7,7 @@
       <div class="board-main-inner">
         <PageHeader
           title="灵感板"
-          description="把检索到的参考图按项目或风格归类整理；板内图片可直接拖到左侧其他灵感板完成二次归类。"
+          description="把检索到的参考图按项目或风格归类整理；板内图片可直接拖到左侧其他灵感板完成二次归类，详情页支持 Ctrl+V 粘贴上传。"
         />
         <div class="surface surface-pad board-panel">
           <BoardDetail v-if="store.currentBoard" :board="store.currentBoard" />

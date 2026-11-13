@@ -21,6 +21,7 @@
       </div>
     </div>
     <p v-if="board.description" class="desc">{{ board.description }}</p>
+    <StatusBar v-if="pasteStatus" :text="pasteStatus" :loading="pasting" />
     <SelectionBar v-if="selectionMode" :count="selectedCount">
       <n-button quaternary size="small" :disabled="allPageSelected" @click="selectAll(pageImageIds)">
         全选本页
@@ -68,7 +69,7 @@
         @toggle-select="toggleSelect(img.id)"
       />
     </div>
-    <EmptyState v-else text="灵感板暂无图片，搜索图片后点击 + 按钮添加" />
+    <EmptyState v-else text="灵感板暂无图片，可点击 + 添加，或直接 Ctrl+V 粘贴上传" />
 
     <PaginationBar
       v-if="totalPages > 1"
@@ -141,7 +142,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { NButton, NInput, NModal, useDialog, useMessage } from 'naive-ui'
 import BoardCard from './BoardCard.vue'
 import BoardPicker from './BoardPicker.vue'
@@ -150,11 +151,20 @@ import PaginationBar from '@/components/common/PaginationBar.vue'
 import AppIcon from '@/components/common/AppIcon.vue'
 import SelectionBar from '@/components/common/SelectionBar.vue'
 import SelectionToggle from '@/components/common/SelectionToggle.vue'
+import StatusBar from '@/components/common/StatusBar.vue'
 import { useBoardsStore } from '@/stores/boards'
 import { useLightboxStore } from '@/stores/lightbox'
 import { useImageSelection } from '@/composables/useImageSelection'
+import { useBoardPasteUpload } from '@/composables/useBoardPasteUpload'
 import { brandSoftButtonTheme } from '@/ui/buttonTheme'
 import { imageUrl } from '@/utils/imageUrl'
+import {
+  clipTimestamp,
+  filesFromClipboard,
+  isEditableTarget,
+  isSupportedImage,
+  normalizePastedImage,
+} from '@/utils/clipboard'
 import type { BatchAddResult, Board } from '@/types/board'
 
 const props = defineProps<{ board: Board | null }>()
@@ -162,6 +172,7 @@ const store = useBoardsStore()
 const lightbox = useLightboxStore()
 const message = useMessage()
 const dialog = useDialog()
+const { pasting, pasteStatus, uploadToBoard } = useBoardPasteUpload()
 
 const {
   mode: selectionMode,
@@ -215,6 +226,20 @@ watch(
 onMounted(() => {
   // 切换灵感板后详情重新挂载，回到页面顶部更符合“打开新板”的预期
   window.scrollTo({ top: 0 })
+  window.addEventListener('paste', onPaste)
+})
+
+// 路由整体被 keep-alive 缓存，离开页面时 onUnmounted 不会触发，需在 deactivated 时注销监听
+onActivated(() => {
+  window.addEventListener('paste', onPaste)
+})
+
+onDeactivated(() => {
+  window.removeEventListener('paste', onPaste)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('paste', onPaste)
 })
 
 watch(totalPages, (value) => {
@@ -224,6 +249,34 @@ watch(totalPages, (value) => {
 function onPageChange(target: number) {
   page.value = target
   window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function onPaste(e: ClipboardEvent) {
+  const board = props.board
+  if (!board) return
+  if (isEditableTarget(e.target) || editVisible.value || lightbox.visible) return
+
+  const clipboardFiles = filesFromClipboard(e.clipboardData)
+  if (!clipboardFiles.length) return
+
+  const pasted = clipboardFiles.filter(isSupportedImage)
+  if (!pasted.length) {
+    e.preventDefault()
+    message.warning('剪贴板里的图片格式不支持，仅支持 JPG / PNG / WebP')
+    return
+  }
+  if (pasting.value) {
+    message.info('正在上传，请等待完成后再粘贴')
+    return
+  }
+
+  e.preventDefault()
+  const stamp = clipTimestamp()
+  const files = pasted.map((file, i) => normalizePastedImage(file, i, stamp))
+  const boardId = board.id
+  void uploadToBoard(boardId, board.name, files, () => {
+    if (store.currentBoardId === boardId) page.value = 1
+  })
 }
 
 function dragIdsFor(imageId: number): number[] {

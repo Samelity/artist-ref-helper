@@ -1089,8 +1089,16 @@ def _record_skipped(progress: dict, name: str) -> None:
         progress["skipped_files"] = files + [name]
 
 
+def _record_upload_result(progress: dict, name: str, image_id: int | None, outcome: str) -> None:
+    """记录单文件处理结果，供灵感板粘贴上传反查图片 ID。调用方需持锁。"""
+    progress["results"] = progress["results"] + [
+        {"name": name, "id": image_id, "outcome": outcome}
+    ]
+
+
 _upload_progress = {
     "running": False,
+    "batch_id": None,
     "current": 0,
     "total": 0,
     "current_file": "",
@@ -1098,6 +1106,7 @@ _upload_progress = {
     "skipped": 0,
     "errors": [],
     "skipped_files": [],
+    "results": [],
 }
 _upload_lock = threading.Lock()
 
@@ -1108,11 +1117,16 @@ class UploadResponse(BaseModel):
 
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload_images(files: list[UploadFile] = File(...), bg: BackgroundTasks = None):  # noqa: B008
+async def upload_images(
+    files: list[UploadFile] = File(...),  # noqa: B008
+    batch_id: str | None = Form(None),
+    bg: BackgroundTasks = None,
+):
     """
     批量上传本地图片（后台处理）。
     先读取所有文件数据，再交给后台线程保存、编码、入库。
     前端通过 GET /upload/status 轮询进度。
+    batch_id 由调用方生成，用于区分不同批次（例如灵感板粘贴上传）。
     """
     if index is None:
         raise HTTPException(status_code=500, detail="FAISS 索引未初始化，请先重建索引")
@@ -1133,8 +1147,9 @@ async def upload_images(files: list[UploadFile] = File(...), bg: BackgroundTasks
 
     with _upload_lock:
         _upload_progress.update(
-            running=True, current=0, total=len(file_data),
-            current_file="", saved=0, skipped=0, errors=[], skipped_files=[],
+            running=True, batch_id=batch_id[:64] if batch_id else None,
+            current=0, total=len(file_data),
+            current_file="", saved=0, skipped=0, errors=[], skipped_files=[], results=[],
         )
 
     bg.add_task(_run_upload, file_data)
@@ -1168,6 +1183,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                 if suffix not in IMAGE_EXTS:
                     with _upload_lock:
                         _upload_progress["errors"] = _upload_progress["errors"] + [f"{original_name}: 不支持的格式"]
+                        _record_upload_result(_upload_progress, original_name, None, "error")
                     continue
 
                 try:
@@ -1178,6 +1194,7 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                         with _upload_lock:
                             _upload_progress["skipped"] = skipped
                             _record_skipped(_upload_progress, original_name)
+                            _record_upload_result(_upload_progress, original_name, existing_id, "duplicate")
                         logger.info(f"[upload] 跳过重复内容: {original_name} (已存在 id={existing_id})")
                         continue
 
@@ -1198,10 +1215,15 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                     if db_id is None:
                         # 唯一索引拦下了并发入库：清掉刚写的文件，按重复跳过，不写 FAISS
                         _discard_new_file(abs_path, "[upload]")
+                        existing_id = db.exists_by_hash(content_hash)
                         skipped += 1
                         with _upload_lock:
                             _upload_progress["skipped"] = skipped
                             _record_skipped(_upload_progress, original_name)
+                            _record_upload_result(
+                                _upload_progress, original_name, existing_id,
+                                "duplicate" if existing_id is not None else "error",
+                            )
                         logger.info(f"[upload] 跳过重复内容: {original_name} (并发入库被唯一索引拦截)")
                         continue
 
@@ -1219,12 +1241,14 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
                     saved += 1
                     with _upload_lock:
                         _upload_progress["saved"] = saved
+                        _record_upload_result(_upload_progress, original_name, db_id, "saved")
                     logger.info(f"[upload] 已导入: id={db_id} faiss_id={faiss_id} file={file_name}")
 
                 except Exception as e:  # noqa: BLE001
                     errors.append(f"{original_name}: {e}")
                     with _upload_lock:
                         _upload_progress["errors"] = list(errors)
+                        _record_upload_result(_upload_progress, original_name, None, "error")
                     logger.error(f"[upload] 导入失败: {original_name}: {e}")
 
             if saved > 0:
@@ -1246,7 +1270,11 @@ async def _run_upload(file_data: list[tuple[str, bytes]]):
 def upload_status():
     """返回当前上传进度，前端轮询此接口。"""
     with _upload_lock:
-        return {**_upload_progress, "skipped_files": list(_upload_progress["skipped_files"])}
+        return {
+            **_upload_progress,
+            "results": list(_upload_progress["results"]),
+            "skipped_files": list(_upload_progress["skipped_files"]),
+        }
 
 
 # ---------- 共享目录批量导入 ----------
